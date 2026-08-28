@@ -1,0 +1,26 @@
+# Control Plane services may project state and issue commands.
+user control-plane
+topic readwrite homeplatform/v1/#
+
+# The first deployed Node can publish only its own state and receive only its
+# own Desired State and command requests. Add a matching explicit block when a
+# new credential is created; do not grant topic wildcards across Nodes.
+user macbook
+topic write homeplatform/v1/nodes/macbook/#
+topic write homeplatform/v1/services/macbook/#
+topic write homeplatform/v1/events/#
+topic write homeplatform/v1/telemetry/macbook/#
+topic write homeplatform/v1/commands/macbook/result
+topic read homeplatform/v1/config/desired-state/#
+topic read homeplatform/v1/commands/macbook/request
+
+# Health checks have no application privileges.
+user healthcheck
+topic read $SYS/broker/uptime
+
+# The native kiosk controller owns only its directly attached Arduino and
+# publishes its state/input. It cannot read commands for unrelated Nodes.
+user kiosk-controller
+topic read homeplatform/v1/alerts/current
+topic write homeplatform/v1/nodes/__KIOSK_NODE_ID__/#
+topic write homeplatform/v1/devices/kiosk/#

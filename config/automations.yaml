@@ -1,0 +1,6 @@
+version: 1
+automations:
+  - id: safe-test
+    name: Safe Test Automation
+    significant: true
+    enabled: true

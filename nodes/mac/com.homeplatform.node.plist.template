@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.homeplatform.node</string>
+  <key>ProgramArguments</key><array>
+    <string>__HOME_PLATFORM_VENV__/bin/python</string>
+    <string>-m</string><string>homeplatform_node.service</string>
+  </array>
+  <key>WorkingDirectory</key><string>__HOME_PLATFORM_NODE_HOME__</string>
+  <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
+  <key>EnvironmentVariables</key><dict>
+    <key>HOMEPLATFORM_NODE_ID</key><string>macbook</string>
+    <key>HOMEPLATFORM_MQTT_HOST</key><string>__HOME_PLATFORM_MQTT_HOST__</string>
+    <key>HOMEPLATFORM_MQTT_PORT</key><string>1883</string>
+    <key>HOMEPLATFORM_MQTT_USERNAME</key><string>macbook</string>
+    <key>HOMEPLATFORM_MQTT_KEYCHAIN_SERVICE</key><string>Home Platform MQTT</string>
+    <key>HOMEPLATFORM_MQTT_KEYCHAIN_ACCOUNT</key><string>macbook</string>
+  </dict>
+  <key>StandardOutPath</key><string>__HOME_PLATFORM_NODE_HOME__/homeplatform-node.log</string>
+  <key>StandardErrorPath</key><string>__HOME_PLATFORM_NODE_HOME__/homeplatform-node-error.log</string>
+</dict></plist>

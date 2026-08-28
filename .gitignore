@@ -1,0 +1,17 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+secrets/
+data/
+artifacts/
+coverage/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.venv/
+node_modules/
+.next/
+dist/
+*.sqlite3

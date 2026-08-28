@@ -1,0 +1,8 @@
+version: 1
+routes:
+  - capability: text-generation
+    strategy: priority-failover
+    providers:
+      - service: lmstudio
+        node: macbook
+        priority: 100

@@ -1,0 +1,6 @@
+version: 1
+integrations:
+  - id: home-assistant
+    type: home-assistant
+    base_url: ${HOME_ASSISTANT_URL}
+    token: secret://home-assistant/token

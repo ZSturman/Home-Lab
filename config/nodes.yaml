@@ -1,0 +1,8 @@
+version: 1
+nodes:
+  - id: pi-control-plane
+    name: Home Pi
+    roles: [control-plane, kiosk]
+  - id: macbook
+    name: MacBook
+    roles: [node]

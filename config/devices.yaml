@@ -1,0 +1,16 @@
+version: 1
+devices:
+  - id: living-room-lights
+    name: Living Room Lights
+    type: home-assistant-light-group
+    node_id: pi-control-plane
+    integration: home-assistant
+    entity_id: light.living_room_living_room
+  - id: kiosk-arduino
+    name: Kiosk Arduino Mega
+    type: status-indicator-and-joystick
+    node_id: pi-control-plane
+  - id: brio-webcam
+    name: Logitech Brio 101
+    type: usb-webcam
+    node_id: pi-control-plane

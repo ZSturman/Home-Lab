@@ -1,0 +1,11 @@
+version: 1
+services:
+  - id: lmstudio
+    name: LM Studio
+    capability: text-generation
+  - id: home-assistant
+    name: Home Assistant
+    capability: home-automation
+  - id: brio-webcam
+    name: Logitech Brio 101
+    capability: private-media-stream

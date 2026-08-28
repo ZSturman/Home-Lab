@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://homeplatform.local/schemas/mqtt/envelope.schema.json",
+  "type": "object",
+  "required": ["schema_version", "event_id", "producer", "occurred_at", "payload"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "event_id": {"type": "string", "format": "uuid"},
+    "producer": {"type": "string", "minLength": 1},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "correlation_id": {"type": ["string", "null"], "format": "uuid"},
+    "payload": {"type": "object"}
+  },
+  "additionalProperties": false
+}

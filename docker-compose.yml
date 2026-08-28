@@ -1,0 +1,200 @@
+name: home-platform
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mosquitto:
+    build:
+      context: ./infrastructure/mosquitto
+    restart: unless-stopped
+    environment:
+      HOMEPLATFORM_KIOSK_NODE_ID: ${HOMEPLATFORM_NODE_ID:-pi-control-plane}
+    ports:
+      - "${MQTT_BIND_IP}:${MQTT_BIND_PORT:-1883}:1883"
+    volumes:
+      - ./infrastructure/mosquitto/mosquitto.conf:/run/homeplatform/mosquitto.conf:ro
+      - ./infrastructure/mosquitto/acl:/run/homeplatform/acl:ro
+      - ./data/mosquitto:/mosquitto/data
+    secrets:
+      - mqtt_health_password
+      - mosquitto_password_database
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -p 1883 -u healthcheck -P \"$$(tr -d '\\n' </run/secrets/mqtt_health_password)\" -t '$$SYS/broker/uptime' -C 1 -W 3 >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  control-plane-core:
+    build:
+      context: ./control-plane
+    command: ["sh", "-c", "alembic upgrade head && python -m app.core"]
+    restart: unless-stopped
+    env_file: ${HOMEPLATFORM_RUNTIME_ENV_FILE:-.env}
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      MQTT_USERNAME: control-plane
+      MQTT_PASSWORD_FILE: /run/secrets/mqtt_control_plane_password
+    secrets:
+      - postgres_password
+      - mqtt_control_plane_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+
+  control-plane-api:
+    build:
+      context: ./control-plane
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.api:app --host 0.0.0.0 --port 8080"]
+    restart: unless-stopped
+    env_file: ${HOMEPLATFORM_RUNTIME_ENV_FILE:-.env}
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      MQTT_USERNAME: control-plane
+      MQTT_PASSWORD_FILE: /run/secrets/mqtt_control_plane_password
+      HOME_ASSISTANT_TOKEN_FILE: /run/secrets/home_assistant_token
+    secrets:
+      - postgres_password
+      - mqtt_control_plane_password
+      - home_assistant_token
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+
+  automation-controller:
+    build:
+      context: ./control-plane
+    command: ["sh", "-c", "alembic upgrade head && python -m app.automation_controller"]
+    restart: unless-stopped
+    env_file: ${HOMEPLATFORM_RUNTIME_ENV_FILE:-.env}
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      MQTT_USERNAME: control-plane
+      MQTT_PASSWORD_FILE: /run/secrets/mqtt_control_plane_password
+    secrets:
+      - postgres_password
+      - mqtt_control_plane_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        CONTROL_PLANE_API_URL: http://control-plane-api:8080
+    restart: unless-stopped
+    environment:
+      CONTROL_PLANE_API_URL: http://control-plane-api:8080
+      NEXT_PUBLIC_PLATFORM_NAME: ${NEXT_PUBLIC_PLATFORM_NAME:-Home Platform}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      control-plane-api:
+        condition: service_started
+
+  kiosk-controller:
+    build:
+      context: ./control-plane
+    command: ["python", "-m", "devices.kiosk.service"]
+    restart: unless-stopped
+    profiles: ["pi-hardware"]
+    env_file: ${HOMEPLATFORM_RUNTIME_ENV_FILE:-.env}
+    environment:
+      SERVICE_NAME: kiosk-controller
+      MQTT_USERNAME: kiosk-controller
+      MQTT_PASSWORD_FILE: /run/secrets/mqtt_kiosk_controller_password
+      HOME_ASSISTANT_TOKEN_FILE: /run/secrets/home_assistant_token
+      HOMEPLATFORM_NODE_HOSTNAME: ${HOMEPLATFORM_NODE_HOSTNAME:-kiosk-lab}
+    secrets:
+      - mqtt_kiosk_controller_password
+      - home_assistant_token
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    devices:
+      - ${KIOSK_HOST_DEVICE:-/dev/ttyACM0}:${KIOSK_CONTROLLER_PORT:-/dev/ttyACM0}
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config:ro
+
+  go2rtc:
+    image: alexxit/go2rtc:1.9.14
+    restart: unless-stopped
+    profiles: ["pi-hardware"]
+    devices:
+      - ${WEBCAM_HOST_DEVICE:-/dev/v4l/by-id/usb-046d_Brio_101_2602AP8RFCA8-video-index0}:/dev/video0
+    volumes:
+      - ./infrastructure/go2rtc/go2rtc.yaml:/config/go2rtc.yaml:ro
+    ports:
+      - "${MQTT_BIND_IP}:1984:1984"
+      - "${MQTT_BIND_IP}:8554:8554"
+      - "${MQTT_BIND_IP}:8555:8555/tcp"
+      - "${MQTT_BIND_IP}:8555:8555/udp"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:1984/api/streams"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  media-controller:
+    build:
+      context: ./control-plane
+    command: ["python", "-m", "app.media_controller"]
+    restart: unless-stopped
+    profiles: ["pi-hardware"]
+    env_file: ${HOMEPLATFORM_RUNTIME_ENV_FILE:-.env}
+    environment:
+      SERVICE_NAME: media-controller
+      MQTT_USERNAME: control-plane
+      MQTT_PASSWORD_FILE: /run/secrets/mqtt_control_plane_password
+      MEDIA_STREAMS_URL: http://go2rtc:1984/api/streams
+    secrets:
+      - mqtt_control_plane_password
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      go2rtc:
+        condition: service_healthy
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  mqtt_control_plane_password:
+    file: ./secrets/mqtt_control_plane_password
+  mqtt_kiosk_controller_password:
+    file: ./secrets/mqtt_kiosk_controller_password
+  mqtt_health_password:
+    file: ./secrets/mqtt_health_password
+  home_assistant_token:
+    file: ./secrets/home_assistant_token
+  mosquitto_password_database:
+    file: ./secrets/mosquitto.passwd
