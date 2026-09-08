@@ -14,7 +14,11 @@ check() {
 }
 
 check 'workspace dashboard service' systemctl is-active --quiet workspace-dashboard.service
-check 'workspace dashboard health' curl --fail --silent --show-error http://127.0.0.1:8787/api/health
+# Workspace Sync deliberately binds to the Pi's Tailscale address, not
+# loopback or the public LAN. Resolve that address instead of falsely
+# reporting an active private dashboard as unavailable.
+tailscale_ip="$(tailscale ip -4)"
+check 'workspace dashboard health' curl --fail --silent --show-error "http://${tailscale_ip}:8787/api/health"
 check 'Home Platform Compose stack' docker compose ls --format json
 check 'Home Platform API through Dashboard proxy' curl --fail --silent --show-error http://127.0.0.1:3000/api/v1/system/snapshot
 
