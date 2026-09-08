@@ -149,6 +149,34 @@ class ReconciliationItemRecord(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ResourceRecord(Base):
+    """A Notion Resource (repo/visit/install/download link) Project Hub has
+    created or been asked to create. This is the durable side of the
+    Project Core -> Project Hub external-mutation contract: Core submits a
+    request keyed by ``idempotency_key``, Project Hub executes the one
+    Notion write this involves and records the outcome here so a retry
+    (same key) is always safe and a duplicate Notion page is never created.
+    """
+
+    __tablename__ = "resources"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    resource_type: Mapped[str] = mapped_column(String(20))
+    label: Mapped[str] = mapped_column(String(200))
+    # Loosely normalized (case/scheme/.git-suffix insensitive) so an SSH and
+    # an HTTPS form of the same remote are recognized as the same resource.
+    normalized_remote_url: Mapped[str] = mapped_column(String(500), unique=True, index=True)
+    remote_url: Mapped[str] = mapped_column(String(500))
+    project_notion_page_id: Mapped[str] = mapped_column(String(80), index=True)
+    notion_page_id: Mapped[str | None] = mapped_column(String(80), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    created_by: Mapped[str] = mapped_column(String(40), default="other")
+    idempotency_key: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
 class DesiredStateRevision(Base):
     __tablename__ = "desired_state_revisions"
 

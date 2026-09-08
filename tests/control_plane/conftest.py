@@ -33,7 +33,7 @@ _alembic_cfg.set_main_option("script_location", str(CONTROL_PLANE_ROOT / "alembi
 alembic_command.upgrade(_alembic_cfg, "head")
 
 from app.db import SessionLocal  # noqa: E402
-from app.models import CommandRecord, NodeRecord, ProjectRecord, ReconciliationItemRecord  # noqa: E402
+from app.models import CommandRecord, NodeRecord, ProjectRecord, ReconciliationItemRecord, ResourceRecord  # noqa: E402
 
 
 @pytest_asyncio.fixture
@@ -41,7 +41,7 @@ async def session():
     async with SessionLocal() as db_session:
         # Clean slate per test: one shared sqlite file across the whole
         # session, so tests must not see each other's rows.
-        for model in (ReconciliationItemRecord, ProjectRecord, CommandRecord, NodeRecord):
+        for model in (ReconciliationItemRecord, ProjectRecord, CommandRecord, NodeRecord, ResourceRecord):
             await db_session.execute(model.__table__.delete())
         await db_session.commit()
         yield db_session

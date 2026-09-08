@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     # The Projects database's live data-source id, resolved once and cached
     # by NotionClient; safe to keep as a plain (non-secret) setting.
     notion_projects_database_id: str = "304aec94-4d3c-80a8-82f6-fd7ff4d2b607"
+    # The Resources database's live data-source id (verified live against
+    # the Notion API on 2026-09-08; see Project Management System's
+    # docs/MIGRATION.md for the verification transcript). Resources is the
+    # target of the repo-onboarding external-mutation contract -- see
+    # POST /api/v1/resources.
+    notion_resources_database_id: str = "30baec94-4d3c-80dc-97d7-000b8c5646a4"
     # The Node that owns ~/Workspace/Projects and executes project.* commands.
     workspace_node_id: str = Field(default="macbook", validation_alias="HOMEPLATFORM_WORKSPACE_NODE_ID")
     service_name: str = "control-plane"

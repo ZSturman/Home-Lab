@@ -20,14 +20,15 @@ from .models import (
     NodeRecord,
     ProjectRecord,
     ReconciliationItemRecord,
+    ResourceRecord,
     ServiceProviderRecord,
 )
 from .mqtt import MqttPublisher
 from .configuration import load_configuration
-from .notion_client import NotionClient
+from .notion_client import NotionClient, ResourcesNotionClient
 from .reconciliation import compute_sync_state, run_reconciliation
 from .registry import ProviderAvailability, resolve_route
-from .schemas import CommandRequest, CreateAutomationRun, CreateProjectRequest, LightActionRequest, ResolveReconciliationRequest
+from .schemas import CommandRequest, CreateAutomationRun, CreateProjectRequest, CreateResourceRequest, LightActionRequest, ResolveReconciliationRequest
 from .settings import get_settings
 from .topics import ALERTS_CURRENT, PROJECT_JOBS_AVAILABLE, command_request
 from .workspace_contract import fetch_storage_contract, fetch_workspace_status
@@ -410,6 +411,43 @@ def get_notion_client() -> NotionClient:
     return NotionClient(settings.notion_token_value, database_id=settings.notion_projects_database_id)
 
 
+def get_resources_notion_client() -> ResourcesNotionClient:
+    settings = get_settings()
+    return ResourcesNotionClient(settings.notion_token_value, database_id=settings.notion_resources_database_id)
+
+
+def normalize_remote_url(url: str) -> str:
+    """Loose equality for comparing Git remotes: case, trailing slash/.git,
+    and SSH-vs-HTTPS form shouldn't count as a different repository. Mirrors
+    Project Core's ``normalize_git_url`` (project_core/core.py) -- kept as a
+    small duplicated pure function rather than a cross-repo import, since
+    Project Core is a client of this API, not a dependency of it."""
+    value = url.strip().lower().removesuffix(".git").rstrip("/")
+    if value.startswith("git@"):
+        value = value.removeprefix("git@").replace(":", "/", 1)
+    for prefix in ("https://", "http://", "ssh://git@", "ssh://"):
+        if value.startswith(prefix):
+            value = value[len(prefix):]
+            break
+    return value
+
+
+def resource_payload(record: ResourceRecord) -> dict:
+    return {
+        "id": record.id,
+        "resource_type": record.resource_type,
+        "label": record.label,
+        "remote_url": record.remote_url,
+        "project_notion_page_id": record.project_notion_page_id,
+        "notion_page_id": record.notion_page_id,
+        "status": record.status,
+        "created_by": record.created_by,
+        "last_error": record.last_error,
+        "created_at": record.created_at.isoformat(),
+        "updated_at": record.updated_at.isoformat(),
+    }
+
+
 def _sanitize_project_name(name: str) -> str:
     value = name.strip()
     if not value or value in {".", ".."} or "/" in value or "\\" in value or "\x00" in value:
@@ -494,6 +532,75 @@ async def create_project(
     await session.commit()
     _publish_project_command(command)
     return project_payload(project)
+
+
+@app.post("/api/v1/resources", status_code=202)
+async def create_resource(
+    request: CreateResourceRequest,
+    session: AsyncSession = Depends(get_session),
+    notion: ResourcesNotionClient = Depends(get_resources_notion_client),
+) -> dict:
+    """Project Core's repo-onboarding external-mutation contract: a durable,
+    idempotent request that results in exactly one Notion Resource page,
+    never a duplicate one. Idempotent two ways, matching how ``/projects``
+    already behaves for its own idempotency_key: a retried request with the
+    same ``idempotency_key`` returns the original record untouched, and a
+    request for a remote URL Project Hub already has a Resource for
+    (regardless of idempotency_key -- e.g. two different pending actions
+    that happened to name the same remote) returns that existing record
+    instead of creating a second page."""
+    existing = await session.scalar(select(ResourceRecord).where(ResourceRecord.idempotency_key == request.idempotency_key))
+    if existing and existing.status != "error":
+        return resource_payload(existing)  # already created (or in flight) -- a retry must not create a second page
+    if existing is None:
+        normalized = normalize_remote_url(request.remote_url)
+        existing_by_url = await session.scalar(select(ResourceRecord).where(ResourceRecord.normalized_remote_url == normalized))
+        if existing_by_url:
+            return resource_payload(existing_by_url)
+        resource = ResourceRecord(
+            id=str(uuid4()),
+            resource_type=request.resource_type,
+            label=request.label,
+            remote_url=request.remote_url,
+            normalized_remote_url=normalized,
+            project_notion_page_id=request.project_notion_page_id,
+            status="pending",
+            created_by=request.source,
+            idempotency_key=request.idempotency_key,
+        )
+        session.add(resource)
+        await session.flush()
+    else:
+        resource = existing  # a prior attempt with this exact key failed -- retry in place, never a second row
+
+    try:
+        page = await notion.create_resource_page(
+            resource_type=request.resource_type, remote_url=request.remote_url,
+            label=request.label, project_notion_page_id=request.project_notion_page_id,
+        )
+        resource.notion_page_id = str(page.get("id") or "") or None
+        resource.status = "created" if resource.notion_page_id else "error"
+        if not resource.notion_page_id:
+            resource.last_error = "Notion did not return a page id"
+    except Exception as exc:  # A Notion outage must produce a durable, retryable failure, not a 500.
+        resource.status = "error"
+        resource.last_error = f"Notion page creation failed: {exc}"
+    await session.commit()
+    return resource_payload(resource)
+
+
+@app.get("/api/v1/resources/{resource_id}")
+async def get_resource(resource_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+    resource = await session.get(ResourceRecord, resource_id)
+    if not resource:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    return resource_payload(resource)
+
+
+@app.get("/api/v1/resources")
+async def list_resources(session: AsyncSession = Depends(get_session)) -> list[dict]:
+    records = list((await session.execute(select(ResourceRecord).order_by(ResourceRecord.created_at))).scalars())
+    return [resource_payload(record) for record in records]
 
 
 @app.get("/api/v1/storage/status")

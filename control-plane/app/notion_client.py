@@ -126,6 +126,27 @@ class NotionClient:
         return await self._request("GET", f"/pages/{page_id}")
 
 
+class ResourcesNotionClient(NotionClient):
+    """Same pacing/retry/auth as ``NotionClient``, pointed at the Resources
+    database instead of Projects. A separate class (not a second database_id
+    parameter passed around ad hoc) keeps each client's one write method
+    obviously scoped to the one database it's allowed to touch."""
+
+    async def create_resource_page(self, *, resource_type: str, remote_url: str, label: str, project_notion_page_id: str) -> dict[str, Any]:
+        source_id = await self.data_source_id()
+        properties: dict[str, Any] = {
+            "id": {"title": _rich_text(label)},
+            "label": {"rich_text": _rich_text(label)},
+            "url": {"url": remote_url},
+            "type": {"select": {"name": resource_type}},
+            "projects": {"relation": [{"id": project_notion_page_id}]},
+        }
+        return await self._request(
+            "POST", "/pages",
+            json={"parent": {"type": "data_source_id", "data_source_id": source_id}, "properties": properties},
+        )
+
+
 def _rich_text(value: str) -> list[dict[str, Any]]:
     return [{"type": "text", "text": {"content": value[i : i + MAX_TEXT_CHUNK]}} for i in range(0, len(value), MAX_TEXT_CHUNK)] or []
 

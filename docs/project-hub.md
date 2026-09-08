@@ -92,7 +92,58 @@ GET    /api/v1/projects/jobs/pending       ?node_id= -- the Mac agent's poll tar
 GET    /api/v1/reconciliation               open items
 POST   /api/v1/reconciliation/run           trigger a pass on demand
 POST   /api/v1/reconciliation/{id}/resolve  {action: create_folder|create_notion|link_existing|ignore, notion_page_id?}
+POST   /api/v1/resources                    create (idempotent on idempotency_key AND normalized remote_url) -- see below
+GET    /api/v1/resources                    list
+GET    /api/v1/resources/{id}               detail
 ```
+
+### Resources -- Project Core's repo-onboarding external-mutation contract
+
+**Status: implemented and locally tested, not yet deployed to the Pi** (added
+2026-09-08 alongside Project Core's second integration pass, while a
+concurrent session was mid-repair on the live Pi/Workspace Sync deployment --
+see `docs/architecture/ecosystem-ownership.md`'s live-audit section for that
+context). Deploying this only requires the normal `alembic upgrade head` +
+container restart path (the migration is purely additive, see
+`alembic/versions/0003_resources.py`); nothing about it depends on or
+conflicts with the concurrent tailnet/backup-status work in this same repo.
+
+Project Core detects a Git remote with no matching Resource
+(`project_core.core.scan_repo_onboarding`) and records a local pending
+action. When a human approves it, Project Core calls this contract instead
+of writing to Notion itself:
+
+```
+POST /api/v1/resources
+{
+  "project_notion_page_id": "<the project's Notion page id>",
+  "resource_type": "repo",
+  "remote_url": "https://github.com/example/repo.git",
+  "label": "example repo",
+  "idempotency_key": "repo-resource:github.com/example/repo",
+  "source": "project-core"
+}
+-> 202 {id, resource_type, label, remote_url, project_notion_page_id, notion_page_id, status, last_error, ...}
+```
+
+Same idempotency shape as `/projects`: a `resources` table row (`0003_resources`
+migration) is created synchronously, the one Notion write happens inside the
+same request, and the row's `status` (`pending`/`created`/`error`) plus
+`last_error` make a Notion outage a durable, retryable failure rather than a
+500. Two independent dedup keys, both enforced by unique DB constraints so
+retries and races can't race past them: `idempotency_key` (a retried request
+for the exact same submission returns the original row untouched) and
+`normalized_remote_url` (a *different* idempotency_key naming the same
+remote -- e.g. two separate approvals for the same repo -- also returns the
+existing row, never a second Notion page). A request whose prior attempt
+`status="error"` retries in place against the same row on the next call with
+the same `idempotency_key`, rather than being stuck or duplicated.
+
+Project Core never queries this database directly and never writes to it --
+after approval it simply re-runs its normal read-only Notion import, which
+picks up the new Resource page like any other. See Project Core's
+`docs/NOTION_SYNC.md` and `docs/ECOSYSTEM_ROLE.md` for its side of this
+contract.
 
 ## MQTT
 

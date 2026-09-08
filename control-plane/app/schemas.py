@@ -61,6 +61,19 @@ class CreateProjectRequest(BaseModel):
     source: Literal["ios-app", "macos-app", "dashboard", "reconciliation", "other"] = "other"
 
 
+class CreateResourceRequest(BaseModel):
+    """Project Core's repo-onboarding external-mutation request. ``resource_type``
+    matches the live Resources database's own ``type`` select options
+    (repo/visit/install/download) rather than inventing a parallel vocabulary."""
+
+    project_notion_page_id: str = Field(min_length=1, max_length=80)
+    resource_type: Literal["repo", "visit", "install", "download"] = "repo"
+    remote_url: str = Field(min_length=1, max_length=500)
+    label: str = Field(min_length=1, max_length=200)
+    idempotency_key: str = Field(min_length=1, max_length=160)
+    source: Literal["project-core", "other"] = "project-core"
+
+
 class ResolveReconciliationRequest(BaseModel):
     action: Literal["create_folder", "create_notion", "link_existing", "ignore"]
     # Required only for link_existing: the notion_page_id of the existing
