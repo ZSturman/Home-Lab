@@ -27,6 +27,7 @@ export function Dashboard({ platformName }: { platformName: string }) {
   const [demoProfile, setDemoProfile] = useState<DemoProfile>("mac");
   const [liveUnlocked, setLiveUnlocked] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<{ tone: "success" | "error"; message: string } | null>(null);
+  const [workspaceStatus, setWorkspaceStatus] = useState<Record<string, any> | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -86,6 +87,21 @@ export function Dashboard({ platformName }: { platformName: string }) {
       socket?.close();
     };
   }, [refresh, shouldConnect]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const readStatus = async () => {
+      try {
+        const response = await fetch("/api/v1/storage/status", { cache: "no-store" });
+        if (response.ok && !cancelled) setWorkspaceStatus(await response.json());
+      } catch {
+        // The primary dashboard remains useful if the sibling storage service is unavailable.
+      }
+    };
+    void readStatus();
+    const interval = window.setInterval(() => void readStatus(), 5000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, []);
 
   const invoke = useCallback(async (key: string, path: string, body?: object, successMessage = "Action accepted by the Control Plane") => {
     setBusy(key);
@@ -162,6 +178,14 @@ export function Dashboard({ platformName }: { platformName: string }) {
           <article className="card"><p>Nodes</p><strong>{snapshot.nodes.filter((node) => node.status === "online").length}/{Math.max(snapshot.nodes.length, 2)}</strong><span>Online Nodes</span></article>
           <article className="card"><p>Attention</p><strong>{snapshot.alerts.length}</strong><span>Active messages</span></article>
           <article className="card"><p>Status indicators</p><strong>{Object.values(snapshot.led).filter((led) => led.mode !== "off").length}</strong><span>Active physical LEDs</span></article>
+        </section>
+
+        <section className="panel">
+          <div className="panel-heading"><div><p className="eyebrow">Workspace Sync</p><h2>Backup protection</h2></div></div>
+          {workspaceStatus ? <div className="list">
+            <article className="list-row"><span className={`status-dot ${workspaceStatus.backup?.state === "completed" || workspaceStatus.backup?.state === "running" ? "online" : "offline"}`} /><div><strong>{workspaceStatus.backup?.active ? "Backup active" : workspaceStatus.backup?.state === "completed" ? "Last backup completed" : "Backup not confirmed"}</strong><p>{workspaceStatus.backup?.stage ?? "waiting"}{workspaceStatus.backup?.percent_done != null ? ` · ${(workspaceStatus.backup.percent_done * 100).toFixed(0)}%` : ""}</p></div><span className="pill">{workspaceStatus.storage?.storage_health ?? "unknown"}</span></article>
+            <p className="description">HDD: {workspaceStatus.storage?.storage_health_detail ?? "unknown"}. {workspaceStatus.backup?.warning ?? workspaceStatus.backup?.error ?? ""}</p>
+          </div> : <p className="empty">Reading Workspace Sync status…</p>}
         </section>
 
         <div className="column-grid">

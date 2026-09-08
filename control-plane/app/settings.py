@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     home_assistant_url: str = "http://host.docker.internal:8123"
     home_assistant_token: str = ""
     home_assistant_token_file: Path | None = None
+    notion_token: str = ""
+    notion_token_file: Path | None = None
+    # The Projects database's live data-source id, resolved once and cached
+    # by NotionClient; safe to keep as a plain (non-secret) setting.
+    notion_projects_database_id: str = "304aec94-4d3c-80a8-82f6-fd7ff4d2b607"
+    # The Node that owns ~/Workspace/Projects and executes project.* commands.
+    workspace_node_id: str = Field(default="macbook", validation_alias="HOMEPLATFORM_WORKSPACE_NODE_ID")
     service_name: str = "control-plane"
     platform_node_id: str = Field(
         default="pi-control-plane",
@@ -41,6 +48,13 @@ class Settings(BaseSettings):
         validation_alias="HOMEPLATFORM_HARDWARE_PROFILE",
         pattern=r"^(standard|pi-hardware)$",
     )
+    # Workspace Sync & Backup Utility's storage-health contract (a sibling
+    # project on the same Pi, not a dependency of this one) -- the ONLY
+    # source this project is allowed to use for disk/mount/storage-mode
+    # information. See app/workspace_contract.py and docs/project-hub.md.
+    workspace_contract_url: str = Field(default="", validation_alias="WORKSPACE_CONTRACT_URL")
+    workspace_contract_token: str = ""
+    workspace_contract_token_file: Path | None = None
 
     @staticmethod
     def _secret(value: str, path: Path | None, name: str) -> str:
@@ -64,6 +78,14 @@ class Settings(BaseSettings):
     @property
     def home_assistant_token_value(self) -> str:
         return self._secret(self.home_assistant_token, self.home_assistant_token_file, "Home Assistant token")
+
+    @property
+    def notion_token_value(self) -> str:
+        return self._secret(self.notion_token, self.notion_token_file, "Notion token")
+
+    @property
+    def workspace_contract_token_value(self) -> str:
+        return self._secret(self.workspace_contract_token, self.workspace_contract_token_file, "workspace contract token")
 
     @property
     def database_url(self) -> str:

@@ -2,10 +2,17 @@ version: 1
 services:
   - id: lmstudio
     name: LM Studio
+    icon: text.bubble.fill
+    node_id: macbook
     capability: text-generation
+    health_check: node-refresh-health
   - id: home-assistant
     name: Home Assistant
+    icon: house.and.flag.fill
+    node_id: pi-control-plane
     capability: home-automation
   - id: brio-webcam
     name: Logitech Brio 101
+    icon: video.fill
+    node_id: pi-control-plane
     capability: private-media-stream

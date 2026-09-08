@@ -22,6 +22,19 @@ STATE_DIRECTORY.mkdir(parents=True, exist_ok=True)
 SPOOL_PATH = STATE_DIRECTORY / "node-outbox.sqlite3"
 DESIRED_STATE_PATH = STATE_DIRECTORY / "desired-state.json"
 
+# Bidirectional Project Hub: the folder tree this node owns, the Workspace
+# Watcher database it reads (read-only, never written by this process), and
+# the Control Plane API this node polls as a belt-and-suspenders fallback to
+# MQTT delivery -- see project.create_directory / project.initialize /
+# workspace.scan below.
+WORKSPACE_ROOT = Path(os.environ.get("HOMEPLATFORM_WORKSPACE_ROOT", "~/Workspace")).expanduser()
+PROJECTS_ROOT = WORKSPACE_ROOT / "Projects"
+WORKSPACE_WATCHER_DB = Path(os.environ.get(
+    "HOMEPLATFORM_WORKSPACE_WATCHER_DB", str(WORKSPACE_ROOT / "Logs/workspace-watcher/events.db"),
+))
+API_BASE_URL = os.environ.get("HOMEPLATFORM_API_URL", "http://127.0.0.1:3000").rstrip("/")
+PROJECT_JOB_POLL_TIMEOUT_SECONDS = 5
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -106,8 +119,13 @@ class DurablePublisher:
         self.connected = True
         client.subscribe(f"{BASE_TOPIC}/commands/{NODE_ID}/request", qos=1)
         client.subscribe(f"{BASE_TOPIC}/config/desired-state/global", qos=1)
+        client.subscribe(f"{BASE_TOPIC}/projects/jobs-available", qos=1)
         self.flush()
         report_state(self)
+        # A reconnect may have missed retained/queued messages while this
+        # node was offline; always reconcile against the Hub's own record of
+        # pending work rather than trusting MQTT delivery alone.
+        poll_pending_project_jobs(self)
 
     def on_disconnect(self, _client: mqtt.Client, _userdata: object, _flags: object, _reason: object, _properties: object) -> None:
         self.connected = False
@@ -122,6 +140,10 @@ class DurablePublisher:
             handle_command(self, payload)
         elif message.topic.endswith("/global"):
             DESIRED_STATE_PATH.write_text(json.dumps(payload, indent=2) + "\n")
+        elif message.topic.endswith("/jobs-available"):
+            # Retained wake ping only -- never trusted as the sole delivery
+            # path. The unconditional 30s loop below polls regardless.
+            poll_pending_project_jobs(self)
 
     def publish(self, topic: str, payload: dict, *, retain: bool = False, qos: int = 1, correlation_id: str | None = None) -> None:
         encoded = json.dumps(envelope(payload, correlation_id), separators=(",", ":"))
@@ -162,7 +184,12 @@ def report_state(publisher: DurablePublisher) -> None:
     publisher.publish(f"{BASE_TOPIC}/nodes/{NODE_ID}/presence", presence, retain=True)
     publisher.publish(
         f"{BASE_TOPIC}/nodes/{NODE_ID}/actual-state",
-        {"lmstudio": "healthy" if lm_studio_healthy else "offline", "comfyui": "healthy" if comfyui_healthy else "offline", "hammerspoon": "healthy" if process_running("Hammerspoon") else "offline"},
+        {
+            "lmstudio": "healthy" if lm_studio_healthy else "offline",
+            "comfyui": "healthy" if comfyui_healthy else "offline",
+            "hammerspoon": "healthy" if process_running("Hammerspoon") else "offline",
+            "workspace_projects": workspace_projects_snapshot(),
+        },
         retain=True,
     )
     publisher.publish(
@@ -196,6 +223,84 @@ def command_result(publisher: DurablePublisher, command_id: str, status: str, de
 def show_notification(title: str, message: str) -> None:
     script = f"display notification {json.dumps(message)} with title {json.dumps(title)}"
     subprocess.run(["/usr/bin/osascript", "-e", script], check=True, timeout=10)
+
+
+def workspace_projects_snapshot() -> list[dict]:
+    """Read-only snapshot of Workspace Watcher's project registry, converted
+    from workspace-root-relative paths to absolute paths (to match Notion's
+    Local Directory convention) so the Hub can match the two by string
+    equality. Returns [] if Workspace Watcher has never run yet -- that is
+    not an error, just "no scan available"."""
+    if not WORKSPACE_WATCHER_DB.exists():
+        return []
+    try:
+        uri = f"file:{WORKSPACE_WATCHER_DB}?mode=ro"
+        connection = sqlite3.connect(uri, uri=True, timeout=2)
+        try:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute("SELECT project_id, path, name, status FROM projects").fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return []
+    return [
+        {
+            "workspace_project_id": row["project_id"],
+            "name": row["name"],
+            "path": str(WORKSPACE_ROOT / row["path"]),
+            "status": row["status"],
+        }
+        for row in rows
+    ]
+
+
+def sanitize_project_name(name: str) -> str:
+    value = name.strip()
+    if not value or value in {".", ".."} or "/" in value or "\\" in value or "\x00" in value:
+        raise ValueError(f"Refusing unsafe project name: {name!r}")
+    return value
+
+
+def initialize_project(target: Path, name: str, template: str) -> None:
+    """Safe, generic initialization only -- no arbitrary commands. Every
+    template gets this baseline; template-specific scaffolding beyond it is
+    intentionally not yet implemented (see AGENTS.md / README)."""
+    readme = target / "README.md"
+    if not readme.exists():
+        readme.write_text(f"# {name}\n", encoding="utf-8")
+    metadata = target / ".project-hub.json"
+    if not metadata.exists():
+        metadata.write_text(
+            json.dumps({"name": name, "template": template, "created_at": now()}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    if not (target / ".git").exists():
+        subprocess.run(["/usr/bin/git", "init", "-q"], cwd=target, check=False, timeout=10)
+
+
+def poll_pending_project_jobs(publisher: DurablePublisher) -> None:
+    """Belt-and-suspenders fallback: ask the Hub directly for any project.*
+    command still outstanding for this node, independent of whether its MQTT
+    request was ever received. handle_command's own saved-result cache makes
+    processing the same job through both paths harmless."""
+    url = f"{API_BASE_URL}/api/v1/projects/jobs/pending?node_id={NODE_ID}"
+    try:
+        with urlopen(Request(url, method="GET"), timeout=PROJECT_JOB_POLL_TIMEOUT_SECONDS) as response:
+            if response.status != 200:
+                return
+            jobs = json.loads(response.read().decode())
+    except Exception:
+        return
+    for job in jobs:
+        try:
+            handle_command(publisher, {
+                "command_id": job["id"],
+                "command_type": job["command_type"],
+                "payload": job["payload"],
+                "expires_at": job["expires_at"],
+            })
+        except Exception:
+            continue
 
 
 def handle_command(publisher: DurablePublisher, payload: dict) -> None:
@@ -232,6 +337,33 @@ def handle_command(publisher: DurablePublisher, payload: dict) -> None:
     elif command_type == "node.refresh-health":
         report_state(publisher)
         command_result(publisher, command_id, "completed")
+    elif command_type == "project.create_directory":
+        try:
+            data = payload.get("payload", {})
+            name = sanitize_project_name(str(data.get("name", "")))
+            target = PROJECTS_ROOT / name
+            target.mkdir(parents=True, exist_ok=True)  # already-exists is success, not failure
+            command_result(publisher, command_id, "completed", result={"workspace_path": str(target)})
+        except ValueError as exc:
+            command_result(publisher, command_id, "failed", str(exc))
+        except OSError as exc:
+            command_result(publisher, command_id, "failed", f"Could not create directory: {exc}")
+    elif command_type == "project.initialize":
+        try:
+            data = payload.get("payload", {})
+            name = sanitize_project_name(str(data.get("name", "")))
+            template = str(data.get("template", "empty"))
+            target = PROJECTS_ROOT / name
+            target.mkdir(parents=True, exist_ok=True)
+            initialize_project(target, name, template)
+            command_result(publisher, command_id, "completed", result={"workspace_path": str(target), "template": template})
+        except ValueError as exc:
+            command_result(publisher, command_id, "failed", str(exc))
+        except OSError as exc:
+            command_result(publisher, command_id, "failed", f"Could not initialize project: {exc}")
+    elif command_type == "workspace.scan":
+        report_state(publisher)
+        command_result(publisher, command_id, "completed")
     else:
         command_result(publisher, command_id, "unsupported", f"Allowlist rejects {command_type}")
 
@@ -244,6 +376,9 @@ def main() -> None:
             time.sleep(30)
             if publisher.connected:
                 report_state(publisher)
+            # Unconditional: runs whether or not MQTT is currently connected,
+            # so a days-long MQTT/Pi outage cannot make a queued job vanish.
+            poll_pending_project_jobs(publisher)
     except KeyboardInterrupt:
         pass
     finally:

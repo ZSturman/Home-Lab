@@ -1,4 +1,14 @@
-name: home-platform
+# Deliberately pinned to match the Compose project name already running on
+# kiosk-lab (`docker compose ls` shows `home-platform-next`, container names
+# like `home-platform-next-postgres-1`) -- this directory used to be named
+# home-platform-next and Compose derived the project name from the
+# directory. Do NOT change this without first stopping the existing
+# `home-platform-next` project on the Pi: a mismatched name here makes the
+# next `docker compose up -d --build` create a second, parallel stack
+# (new containers/network, e.g. home-platform-postgres-1) instead of
+# updating the one that's actually running, silently doubling Postgres/
+# Mosquitto/etc. See docs/kiosk-lab-platform.md.
+name: home-platform-next
 
 services:
   postgres:
@@ -50,9 +60,11 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       MQTT_USERNAME: control-plane
       MQTT_PASSWORD_FILE: /run/secrets/mqtt_control_plane_password
+      NOTION_TOKEN_FILE: /run/secrets/notion_token
     secrets:
       - postgres_password
       - mqtt_control_plane_password
+      - notion_token
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,10 +85,18 @@ services:
       MQTT_USERNAME: control-plane
       MQTT_PASSWORD_FILE: /run/secrets/mqtt_control_plane_password
       HOME_ASSISTANT_TOKEN_FILE: /run/secrets/home_assistant_token
+      NOTION_TOKEN_FILE: /run/secrets/notion_token
+      # Workspace Sync & Backup Utility's storage contract (sibling project,
+      # same Pi) -- the only source this project uses for disk/mount/
+      # storage-mode information. See app/workspace_contract.py.
+      WORKSPACE_CONTRACT_URL: ${WORKSPACE_CONTRACT_URL:-}
+      WORKSPACE_CONTRACT_TOKEN_FILE: /run/secrets/workspace_contract_token
     secrets:
       - postgres_password
       - mqtt_control_plane_password
       - home_assistant_token
+      - notion_token
+      - workspace_contract_token
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -196,5 +216,9 @@ secrets:
     file: ./secrets/mqtt_health_password
   home_assistant_token:
     file: ./secrets/home_assistant_token
+  notion_token:
+    file: ./secrets/notion_token
+  workspace_contract_token:
+    file: ./secrets/workspace_contract_token
   mosquitto_password_database:
     file: ./secrets/mosquitto.passwd

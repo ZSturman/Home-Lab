@@ -2,5 +2,12 @@ version: 1
 automations:
   - id: safe-test
     name: Safe Test Automation
+    description: Verifies the durable Home Platform automation lifecycle without invoking external systems.
+    icon: checkmark.seal.fill
+    node_id: macbook
+    runner: control-plane
     significant: true
     enabled: true
+    actions: [run, stop]
+    arguments: []
+    presets: []

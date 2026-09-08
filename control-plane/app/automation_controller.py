@@ -64,7 +64,7 @@ async def execute_safe_test(run_id: str, publisher: MqttPublisher) -> None:
             stage = await session.scalar(select(AutomationStage).where(
                 AutomationStage.run_id == run_id, AutomationStage.position == position,
             ))
-            if not run or not stage:
+            if not run or not stage or run.status != "running":
                 return
             run.current_stage = name
             stage.status, stage.started_at = "running", now()
@@ -76,7 +76,7 @@ async def execute_safe_test(run_id: str, publisher: MqttPublisher) -> None:
             stage = await session.scalar(select(AutomationStage).where(
                 AutomationStage.run_id == run_id, AutomationStage.position == position,
             ))
-            if not run or not stage:
+            if not run or not stage or run.status != "running":
                 return
             stage.status, stage.completed_at = "completed", now()
             if position == len(stage_names):

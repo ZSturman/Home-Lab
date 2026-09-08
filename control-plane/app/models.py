@@ -111,6 +111,44 @@ class AutomationStage(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ProjectRecord(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200))
+    notion_page_id: Mapped[str | None] = mapped_column(String(80), unique=True, index=True)
+    workspace_project_id: Mapped[str | None] = mapped_column(String(36), unique=True, index=True)
+    workspace_path: Mapped[str | None] = mapped_column(String(500))
+    workspace_device: Mapped[str | None] = mapped_column(String(120))
+    template: Mapped[str] = mapped_column(String(40), default="empty")
+    notion_state: Mapped[str] = mapped_column(String(20), default="absent")
+    workspace_state: Mapped[str] = mapped_column(String(20), default="absent")
+    sync_state: Mapped[str] = mapped_column(String(40), default="pending_workspace_creation", index=True)
+    created_by: Mapped[str] = mapped_column(String(40), default="other")
+    idempotency_key: Mapped[str | None] = mapped_column(String(120), unique=True, index=True)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class ReconciliationItemRecord(Base):
+    __tablename__ = "reconciliation_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), index=True)
+    project_id: Mapped[str | None] = mapped_column(ForeignKey("projects.id"), index=True)
+    notion_page_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    notion_name: Mapped[str | None] = mapped_column(String(200))
+    workspace_project_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    workspace_path: Mapped[str | None] = mapped_column(String(500))
+    workspace_name: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(20), default="open", index=True)
+    resolution: Mapped[str | None] = mapped_column(String(40))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class DesiredStateRevision(Base):
     __tablename__ = "desired_state_revisions"
 

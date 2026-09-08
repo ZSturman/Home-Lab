@@ -23,6 +23,18 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(configuration.routes[0].providers[0].node, "macbook")
         self.assertEqual(len(configuration.checksum()), 64)
 
+    def test_automation_registry_exposes_safe_metadata_and_validates_arguments(self) -> None:
+        automation = load_configuration(ROOT / "config").automation("safe-test")
+        self.assertIsNotNone(automation)
+        self.assertEqual(automation.runner if automation else None, "control-plane")
+        self.assertIn("stop", automation.actions if automation else [])
+        self.assertEqual(automation.validate_arguments({}) if automation else None, {})
+
+    def test_automation_registry_rejects_unknown_arguments(self) -> None:
+        automation = load_configuration(ROOT / "config").automation("safe-test")
+        with self.assertRaises(ValueError):
+            automation.validate_arguments({"unsafe-shell": "rm -rf"})  # type: ignore[union-attr]
+
     def test_priority_failover_requires_health(self) -> None:
         route = load_configuration(ROOT / "config").routes[0]
         self.assertIsNone(resolve_route(route, [ProviderAvailability("macbook", "lmstudio", "offline")]))

@@ -32,6 +32,23 @@ if [ ! -f secrets/home_assistant_token ]; then
 fi
 chmod 600 secrets/home_assistant_token
 
+# Notion is explicitly opt-in too. Put the Projects-database integration
+# token in this file; an empty file disables Notion sync without an error.
+if [ ! -f secrets/notion_token ]; then
+  : >secrets/notion_token
+fi
+chmod 600 secrets/notion_token
+
+# Workspace Sync & Backup Utility's dashboard token (sibling project, same
+# Pi) -- copy the value of WORKSPACE_DASHBOARD_TOKEN from that project's
+# /etc/workspace-util/secrets.env into this file after bootstrap. An empty
+# file just means the storage contract call goes out with no token, which
+# only works if that dashboard has no token configured either.
+if [ ! -f secrets/workspace_contract_token ]; then
+  : >secrets/workspace_contract_token
+fi
+chmod 600 secrets/workspace_contract_token
+
 if [ ! -f secrets/mosquitto.passwd ]; then
   docker run --rm -v "$ROOT/secrets:/secrets" eclipse-mosquitto:2.0.22 sh -ec '
     password() { tr -d "\\r\\n" <"/secrets/$1"; }

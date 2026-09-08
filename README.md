@@ -11,6 +11,20 @@ responsive Next.js Dashboard, Mac Node Service, Home Assistant integration, and
 a native Arduino kiosk controller. See [architecture overview](docs/architecture/overview.md),
 [host profiles](docs/operations/host-profiles.md), and [Control Plane deployment](deploy/control-plane/README.md).
 
+## Bidirectional Project Hub
+
+The Control Plane also keeps the Notion Projects database and
+`~/Workspace/Projects` in sync, with phone-initiated project creation. See
+[docs/project-hub.md](docs/project-hub.md) for the data model, API, MQTT
+topics, and reconciliation algorithm. Requires a Notion integration token in
+`secrets/notion_token` (see `deploy/control-plane/bootstrap-secrets.sh`) --
+leave that file empty to disable Notion sync without an error.
+
+The Pi-wide ownership decision, database boundaries, offline behavior, and
+fresh-host recovery sequence are documented in
+[Workspace and kiosk-lab ownership](docs/architecture/ecosystem-ownership.md)
+and [kiosk-lab provisioning](deploy/kiosk-lab/README.md).
+
 ## Local development
 
 1. Copy `.env.example` to `.env` and create the untracked `secrets/` files

@@ -14,9 +14,13 @@ from .configuration import load_configuration
 from .db import SessionLocal
 from .models import CommandRecord, DesiredStateRevision, EventRecord, NodeRecord, ServiceProviderRecord
 from .mqtt import MqttPublisher
+from .notion_client import NotionClient
+from .reconciliation import run_reconciliation
 from .schemas import CommandResultPayload, Envelope, NodePresence
 from .settings import get_settings
 from .topics import BASE_TOPIC, desired_state
+
+RECONCILIATION_INTERVAL_SECONDS = 300
 
 LOG = logging.getLogger(__name__)
 
@@ -186,6 +190,29 @@ class MqttCore:
             retain=True,
         )
 
+    async def run_reconciliation_loop(self, stopped: asyncio.Event) -> None:
+        notion = NotionClient(self.settings.notion_token_value, database_id=self.settings.notion_projects_database_id)
+        while not stopped.is_set():
+            try:
+                async with SessionLocal() as session:
+                    summary = await run_reconciliation(session, notion)
+                    if summary.errors:
+                        LOG.warning("Reconciliation pass completed with errors: %s", summary.errors)
+                    else:
+                        LOG.info(
+                            "Reconciliation pass: %d Notion pages, %d workspace entries, "
+                            "%d projects created, %d updated, %d new reconciliation items",
+                            summary.notion_pages_seen, summary.workspace_entries_seen,
+                            summary.projects_created, summary.projects_updated,
+                            summary.reconciliation_items_opened,
+                        )
+            except Exception:
+                LOG.exception("Reconciliation pass failed; will retry next interval")
+            try:
+                await asyncio.wait_for(stopped.wait(), timeout=RECONCILIATION_INTERVAL_SECONDS)
+            except asyncio.TimeoutError:
+                pass
+
     async def run(self) -> None:
         self.loop = asyncio.get_running_loop()
         self.project_lock = asyncio.Lock()
@@ -196,7 +223,9 @@ class MqttCore:
         stopped = asyncio.Event()
         for sig in (signal.SIGTERM, signal.SIGINT):
             self.loop.add_signal_handler(sig, stopped.set)
+        reconciliation_task = asyncio.create_task(self.run_reconciliation_loop(stopped))
         await stopped.wait()
+        await reconciliation_task
         self.client.loop_stop()
         self.client.disconnect()
         self.publisher.stop()

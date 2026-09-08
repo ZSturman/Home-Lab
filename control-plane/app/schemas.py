@@ -24,6 +24,7 @@ class NodePresence(BaseModel):
 
 
 class CommandRequest(BaseModel):
+    command_id: UUID | None = None
     node_id: str
     command_type: str = Field(pattern=r"^[a-z][a-z0-9._-]+$")
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -44,3 +45,24 @@ class LightActionRequest(BaseModel):
 
 class CreateAutomationRun(BaseModel):
     trigger: Literal["manual", "scheduled", "test"] = "manual"
+    run_id: UUID | None = None
+    source: Literal["macos-app", "ios-app", "widget", "control-center", "dashboard", "scheduled", "other"] = "other"
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+PROJECT_TEMPLATES = Literal["empty", "swift-app", "python", "web-app", "experiment", "utility"]
+
+
+class CreateProjectRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=4000)
+    template: PROJECT_TEMPLATES = "empty"
+    idempotency_key: str = Field(min_length=1, max_length=120)
+    source: Literal["ios-app", "macos-app", "dashboard", "reconciliation", "other"] = "other"
+
+
+class ResolveReconciliationRequest(BaseModel):
+    action: Literal["create_folder", "create_notion", "link_existing", "ignore"]
+    # Required only for link_existing: the notion_page_id of the existing
+    # Projects row to associate with this workspace-only directory.
+    notion_page_id: str | None = None

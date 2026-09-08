@@ -32,3 +32,9 @@ def desired_state(scope: str) -> str:
 
 
 ALERTS_CURRENT = f"{BASE_TOPIC}/alerts/current"
+
+# Retained, publish-only wake ping: tells an already-connected Mac agent to
+# poll /api/v1/projects/jobs/pending immediately instead of waiting for its
+# next 30s cycle. Never the source of truth for job delivery -- the Mac's
+# periodic poll is what guarantees a job is never lost to a missed message.
+PROJECT_JOBS_AVAILABLE = f"{BASE_TOPIC}/projects/jobs-available"
