@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     workspace_contract_url: str = Field(default="", validation_alias="WORKSPACE_CONTRACT_URL")
     workspace_contract_token: str = ""
     workspace_contract_token_file: Path | None = None
+    # Mounted only into control-plane-api on kiosk-lab. Empty keeps local
+    # development and non-Pi deployments free of a Tailscale dependency.
+    tailscale_local_api_socket: Path | None = Field(default=None, validation_alias="TAILSCALE_LOCAL_API_SOCKET")
 
     @staticmethod
     def _secret(value: str, path: Path | None, name: str) -> str:

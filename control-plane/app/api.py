@@ -31,6 +31,7 @@ from .schemas import CommandRequest, CreateAutomationRun, CreateProjectRequest, 
 from .settings import get_settings
 from .topics import ALERTS_CURRENT, PROJECT_JOBS_AVAILABLE, command_request
 from .workspace_contract import fetch_storage_contract, fetch_workspace_status
+from .tailnet import fetch_tailnet_status
 
 
 def utc_now() -> datetime:
@@ -502,6 +503,19 @@ async def get_storage_status() -> dict:
     inspects disks/mounts/UUIDs itself. Never raises: an unreachable
     Workspace Sync Utility degrades to mode "unknown", it does not 503."""
     return await fetch_workspace_status()
+
+
+@app.get("/api/v1/tailnet/status")
+async def get_tailnet_status(session: AsyncSession = Depends(get_session)) -> dict:
+    """Live, sanitized tailnet connectivity. This is intentionally separate
+    from NodeRecord/MQTT health: a reachable device may not run an agent."""
+    records = list((await session.execute(select(NodeRecord))).scalars())
+    agents = [
+        {"id": record.id, "name": record.display_name or record.id, "status": record.status,
+         "health": record.health, "last_seen_at": record.last_seen_at.isoformat() if record.last_seen_at else None}
+        for record in records
+    ]
+    return await fetch_tailnet_status(agents=agents)
 
 
 @app.get("/api/v1/projects")

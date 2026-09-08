@@ -18,6 +18,14 @@ function shortTime(value: string | null) {
   return value ? new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(value)) : "Not reported";
 }
 
+function bytes(value: number | null | undefined) {
+  if (typeof value !== "number") return "Not reported";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let amount = value; let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
+  return `${amount.toFixed(unit < 3 ? 0 : 1)} ${units[unit]}`;
+}
+
 export function Dashboard({ platformName }: { platformName: string }) {
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +36,7 @@ export function Dashboard({ platformName }: { platformName: string }) {
   const [liveUnlocked, setLiveUnlocked] = useState(false);
   const [actionFeedback, setActionFeedback] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [workspaceStatus, setWorkspaceStatus] = useState<Record<string, any> | null>(null);
+  const [tailnetStatus, setTailnetStatus] = useState<Record<string, any> | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -38,6 +47,21 @@ export function Dashboard({ platformName }: { platformName: string }) {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to reach the Control Plane");
     }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const readTailnet = async () => {
+      try {
+        const response = await fetch("/api/v1/tailnet/status", { cache: "no-store" });
+        if (response.ok && !cancelled) setTailnetStatus(await response.json());
+      } catch {
+        // Connectivity telemetry is an enhancement, never a dashboard dependency.
+      }
+    };
+    void readTailnet();
+    const interval = window.setInterval(() => void readTailnet(), 15000);
+    return () => { cancelled = true; window.clearInterval(interval); };
   }, []);
 
   const shouldConnect = activeView === "Overview" || demoMode === "live";
@@ -183,9 +207,20 @@ export function Dashboard({ platformName }: { platformName: string }) {
         <section className="panel">
           <div className="panel-heading"><div><p className="eyebrow">Workspace Sync</p><h2>Backup protection</h2></div></div>
           {workspaceStatus ? <div className="list">
-            <article className="list-row"><span className={`status-dot ${workspaceStatus.backup?.state === "completed" || workspaceStatus.backup?.state === "running" ? "online" : "offline"}`} /><div><strong>{workspaceStatus.backup?.active ? "Backup active" : workspaceStatus.backup?.state === "completed" ? "Last backup completed" : "Backup not confirmed"}</strong><p>{workspaceStatus.backup?.stage ?? "waiting"}{workspaceStatus.backup?.percent_done != null ? ` · ${(workspaceStatus.backup.percent_done * 100).toFixed(0)}%` : ""}</p></div><span className="pill">{workspaceStatus.storage?.storage_health ?? "unknown"}</span></article>
-            <p className="description">HDD: {workspaceStatus.storage?.storage_health_detail ?? "unknown"}. {workspaceStatus.backup?.warning ?? workspaceStatus.backup?.error ?? ""}</p>
+            <article className="list-row"><span className={`status-dot ${workspaceStatus.backup?.state === "completed" || workspaceStatus.backup?.state === "running" ? "online" : "offline"}`} /><div><strong>{workspaceStatus.backup?.active ? "Backup running" : workspaceStatus.backup?.state === "completed" ? "Last backup completed" : `Backup ${workspaceStatus.backup?.state ?? "unknown"}`}</strong><p>{workspaceStatus.backup?.stage ?? "waiting"}{workspaceStatus.backup?.percent_done != null ? ` · ${(workspaceStatus.backup.percent_done * 100).toFixed(1)}%` : ""}</p></div><span className="pill">{workspaceStatus.backup?.state ?? "unknown"}</span></article>
+            {workspaceStatus.backup?.percent_done != null && <div className="progress" aria-label="Backup progress"><span style={{ width: `${Math.max(0, Math.min(100, workspaceStatus.backup.percent_done * 100))}%` }} /></div>}
+            <p className="description">{workspaceStatus.backup?.files_processed != null ? `${workspaceStatus.backup.files_processed.toLocaleString()} / ${workspaceStatus.backup.files_total?.toLocaleString?.() ?? "?"} files · ` : ""}{workspaceStatus.backup?.bytes_processed != null ? `${bytes(workspaceStatus.backup.bytes_processed)} / ${bytes(workspaceStatus.backup.bytes_total)} · ` : ""}last progress {shortTime(workspaceStatus.backup?.last_progress_at ? new Date(workspaceStatus.backup.last_progress_at * 1000).toISOString() : null)}</p>
+            <p className="description">External backup disk: {workspaceStatus.backup_destination?.mounted ? "mounted" : "state unavailable"} · {bytes(workspaceStatus.backup_destination?.total_bytes)} total · {bytes(workspaceStatus.backup_destination?.available_bytes)} available. {workspaceStatus.backup_destination?.detail ?? ""}</p>
+            {workspaceStatus.storage?.mode && <p className="description">Workspace mirror: {workspaceStatus.storage.mode} — {workspaceStatus.storage.storage_health_detail ?? "not configured"}. This is separate from backup storage.</p>}
+            {(workspaceStatus.backup?.warning || workspaceStatus.backup?.error) && <p className="description">{workspaceStatus.backup.warning ?? workspaceStatus.backup.error}</p>}
           </div> : <p className="empty">Reading Workspace Sync status…</p>}
+        </section>
+
+        <section className="panel">
+          <div className="panel-heading"><div><p className="eyebrow">Tailscale</p><h2>Tailnet devices</h2></div><span className="pill">{tailnetStatus?.state ?? "reading"}</span></div>
+          {tailnetStatus ? <div className="list">{tailnetStatus.devices?.length ? tailnetStatus.devices.map((device: any) => (
+            <article className="list-row tailnet-device" key={device.id}><span className={`status-dot ${device.online ? "online" : "offline"}`} /><div><strong>{device.name}{device.local ? " · this Pi" : ""}</strong><p>Tailnet: {device.online ? "online" : "offline"} · {device.os} · {device.ips?.[0] ?? "no IP"} · last seen {shortTime(device.last_seen_at)}</p><p>{device.dns_name ?? "MagicDNS unavailable"} · {device.transport}{device.platform_agent ? ` · Platform agent: ${device.platform_agent.status}` : " · Platform agent: not installed"}</p></div><span className="pill">{device.online ? "online" : "offline"}</span></article>
+          )) : <p className="empty">No tailnet devices reported.</p>}{tailnetStatus.warnings?.map((warning: string) => <p className="description" key={warning}>{warning}</p>)}</div> : <p className="empty">Reading Tailscale state…</p>}
         </section>
 
         <div className="column-grid">

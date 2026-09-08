@@ -44,7 +44,26 @@ UNKNOWN_STATUS: dict = {
         "updated_at": None,
         "warning": "Workspace Sync Utility unreachable or not configured.",
     },
+    "backup_destination": None,
 }
+
+
+def _backup_destination(status: dict) -> dict | None:
+    """Extract backup-HDD facts, not the separate Workspace mirror mode."""
+    storage = status.get("storage") if isinstance(status, dict) else None
+    backup = storage.get("backup") if isinstance(storage, dict) else None
+    if not isinstance(backup, dict) or not isinstance(backup.get("total"), int):
+        return None
+    checks = status.get("checks") if isinstance(status, dict) else []
+    disk_check = next((check for check in checks if isinstance(check, dict) and "backup" in str(check.get("name", "")).lower() and "disk" in str(check.get("name", "")).lower()), None)
+    return {
+        "mounted": bool(disk_check and disk_check.get("status") == "ok"),
+        "detail": disk_check.get("detail") if isinstance(disk_check, dict) else "Backup destination capacity reported",
+        "used_bytes": backup.get("used"), "total_bytes": backup.get("total"),
+        "available_bytes": backup.get("total") - backup.get("used", 0),
+        "snapshots": (status.get("backup") or {}).get("snapshots") if isinstance(status.get("backup"), dict) else None,
+        "last_snapshot_at": (status.get("backup") or {}).get("last") if isinstance(status.get("backup"), dict) else None,
+    }
 
 
 async def fetch_storage_contract() -> dict:
@@ -81,13 +100,15 @@ async def fetch_workspace_status() -> dict:
     base_url = settings.workspace_contract_url.rsplit("/api/storage/contract", 1)[0]
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            storage_response, backup_response = await asyncio.gather(
+            storage_response, backup_response, status_response = await asyncio.gather(
                 client.get(f"{base_url}/api/storage/contract", headers=headers),
                 client.get(f"{base_url}/api/backup/status", headers=headers),
+                client.get(f"{base_url}/api/status", headers=headers),
             )
             storage_response.raise_for_status()
             backup_response.raise_for_status()
-            return {"storage": storage_response.json(), "backup": backup_response.json()}
+            status_response.raise_for_status()
+            return {"storage": storage_response.json(), "backup": backup_response.json(), "backup_destination": _backup_destination(status_response.json())}
     except Exception as exc:  # noqa: BLE001 -- storage failure must degrade
         logger.warning("workspace status unreachable: %s", exc)
         return {

@@ -99,3 +99,19 @@ async def test_storage_status_endpoint_never_errors_when_unconfigured(monkeypatc
             r = await ac.get("/api/v1/storage/status")
     assert r.status_code == 200
     assert r.json()["storage"]["mode"] == "unknown"
+
+
+def test_backup_destination_is_not_workspace_test_mode():
+    from app.workspace_contract import _backup_destination
+
+    destination = _backup_destination({
+        "storage": {"backup": {"used": 2_200, "total": 4_600}},
+        "checks": [{"name": "Backup disk", "status": "ok", "detail": "mounted /dev/sda2"}],
+        "backup": {"snapshots": 3, "last": "2026-09-08T18:00:00Z"},
+        "workspace_state": {"mode": "test"},
+    })
+    assert destination == {
+        "mounted": True, "detail": "mounted /dev/sda2", "used_bytes": 2_200,
+        "total_bytes": 4_600, "available_bytes": 2_400, "snapshots": 3,
+        "last_snapshot_at": "2026-09-08T18:00:00Z",
+    }
