@@ -15,7 +15,7 @@ similarly named repositories are interchangeable deployments.
 | Mac Workspace files | **Mac filesystem** | The Pi holds coordination state and optional mirrors/backups, never the canonical development checkout. |
 | Physical disks, mounts, Syncthing, restic, backup/restore, and storage health | **Workspace Sync & Backup Utility** | Project Hub reads one HTTP storage contract; it never inspects mounts or Workspace Sync state directly. |
 | Homelab controls | **HomeLab Control is a UI client** | It reads Project Hub APIs and submits durable requests; it does not own MQTT, SQL, or shell execution. |
-| Kiosk display, Arduino protocol, and kiosk-specific telemetry | **Kiosk Lab** | Separate application; no ownership of Project Hub, workspace metadata, or Pi-wide deployment. |
+| Kiosk display and kiosk-specific telemetry | **Home Platform** | The Platform-owned browser is the sole display path; it has no ownership of workspace metadata. |
 
 `Bidirectional Project Hub/` is intentionally only a design pointer. Its
 implemented code lives in `Home Lab/home-platform`; it is not a second
@@ -34,7 +34,7 @@ Mac ~/Workspace/Projects (real source directories)
 
 HomeLab Control (macOS/iOS) -> Tailscale Serve -> Home Platform API
 Workspace Sync dashboard -> storage/backup administration only
-Kiosk Lab -> independent kiosk hardware and telemetry paths only
+Home Platform -> Platform-owned kiosk display path only
 ```
 
 The Mac node queues results durably and polls outstanding jobs even when MQTT
@@ -62,10 +62,8 @@ reconciles when it reconnects.
   an ecosystem-wide authority. A future migration must choose one canonical ID
   and use an explicit import, never run two sync loops.
 - **Homelab Control** already follows the correct client-only boundary.
-- **Kiosk Lab** was moved from `Workspace/TEMP/Kiosk` to
-  `Workspace/Projects/Kiosk Lab`. Its source and uncommitted work were
-  preserved. The formerly sourced terminal work-log hook now uses that stable
-  path. Its old Pi scripts are historical until their target is verified.
+- **Kiosk Lab** remains a source project only. Its old Pi runtime has been
+  retired; no deployed service reads that source tree.
 
 ## Database inventory
 
@@ -85,12 +83,10 @@ and Project Hub's read-only summary endpoint
 ## Live audit facts and recovery status
 
 At the successful SSH inspection, `kiosk-lab` was a Raspberry Pi 5 running
-Debian 13 on arm64. The post-reboot boot ID started at 08:56 EDT. The Home
-Platform control-plane, API, automation, dashboard, Mosquitto, and Postgres
-containers had recovered, as had `workspace-dashboard`, Syncthing, the kiosk
-host agents, the legacy kiosk stack, and Home Assistant. The external 4.5 TB
-Seagate USB HDD (`/dev/sda2`, exFAT, UUID `653E-F09E`) was mounted at
-`/mnt/workspace-backup` with about 2.4 TB free.
+Debian 13 on arm64. The Home Platform control-plane, API, automation,
+dashboard, Mosquitto, Postgres, and Platform-owned kiosk browser recovered.
+The external 4.5 TB Seagate USB HDD (`/dev/sda2`, exFAT, UUID `653E-F09E`) was
+mounted at `/mnt/workspace-backup` with about 2.4 TB free.
 
 The first post-boot backup guard correctly failed because that mount was not
 yet present; the following hourly run succeeded and added a restic snapshot.
@@ -102,6 +98,4 @@ The live Pi deployment is not fully reproducible yet: Home Platform was
 running from an untracked copied tree under `/home/kiosk/home-platform`, and
 Workspace Sync has no Git commit or remote. `deploy/kiosk-lab/bootstrap.sh`
 defines the corrected `/opt/home-platform` + `/opt/workspace-util` layout, but
-the Workspace Sync tree must first be committed and pushed. The legacy
-`/opt/kiosk-lab` Compose stack remains independent and is not a bootstrap
-dependency; retire it only after its kiosk hardware/UI replacement is verified.
+the Workspace Sync tree must first be committed and pushed.

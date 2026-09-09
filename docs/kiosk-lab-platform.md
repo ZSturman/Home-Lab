@@ -2,7 +2,7 @@
 
 `kiosk-lab` (Raspberry Pi 5, Debian 13, Tailscale IP `100.90.61.70`,
 `kiosk-lab.tailef7acc.ts.net`) is a **shared host**, not a single
-application. Three independent things run on it:
+application. Two independent systems run on it:
 
 1. **Workspace Sync & Backup Utility** -- owns physical storage: disks,
    UUID-based mounts, workspace storage state, the backup HDD, Syncthing.
@@ -11,11 +11,6 @@ application. Three independent things run on it:
    stack) -- owns project metadata, Notion sync, jobs, Mac-agent
    communication, project-facing APIs. Repo: `Home Lab/home-platform/`
    (the `Bidirectional Project Hub/` folder is just a pointer to here).
-3. A **pre-existing legacy stack** at `/opt/kiosk-lab` (Home Assistant, the
-   original `kiosk-hub`, its own Mosquitto) that predates both projects and
-   is owned by neither -- kept running, not touched by this work, documented
-   here only so its ports/services aren't mistaken for either project's.
-
 Neither of the first two projects reads the other's database, config,
 mounts, or state files. Where they need to know about each other, they use
 one narrow HTTP contract (below) -- never filesystem assumptions, never
@@ -56,7 +51,6 @@ flowchart TB
             NextDash["Next.js dashboard\n127.0.0.1:3000"]
         end
         Serve["Tailscale Serve\nkiosk-lab.tailef7acc.ts.net -> :3000"]
-        Legacy["/opt/kiosk-lab (pre-existing, unrelated)\nHome Assistant :8123, kiosk-hub :8080,\nMosquitto 127.0.0.1:1883"]
 
         Dashboard --> DiskGuard --> BackupHDD
         Dashboard --> SyncthingPi
@@ -86,7 +80,6 @@ flowchart TB
 
     style WSU fill:#1a3a1a,stroke:#4a8a4a
     style HP fill:#1a1a3a,stroke:#4a4a8a
-    style Legacy fill:#3a1a1a,stroke:#8a4a4a
 ```
 
 ## The inter-project contract
@@ -158,18 +151,13 @@ reasoning.
 | Next.js dashboard | Project Hub | `home-platform-next-dashboard-1` (Docker) | 3000 (loopback only) | HTTP | -- | `docker compose`, `restart: unless-stopped` | none defined | `CONTROL_PLANE_API_URL` (not secret) | No (127.0.0.1 only) | Yes, via Tailscale Serve | HomeLab Control loses its HTTPS endpoint; Mac agents/MQTT unaffected |
 | Tailscale Serve | Project Hub / host | `tailscaled` config | 443 (tailnet) | HTTPS -> :3000 | -- | part of `tailscaled.service`, enabled | -- | -- | No | Yes (this *is* the Tailscale path) | HomeLab Control can't reach the Pi from outside the LAN |
 | kiosk-controller / go2rtc / media-controller | home-platform (hardware layer, not Project Hub) | Docker, `profiles: [pi-hardware]` | go2rtc: 1984/8554/8555 (Tailscale-bound) | serial (Arduino) / RTSP/WebRTC | `/dev/ttyACM0`, webcam device | `docker compose --profile pi-hardware` | go2rtc: `wget` healthcheck | mqtt passwords, `home_assistant_token` | No | Partially (go2rtc ports) | Arduino/webcam features pause; Project Hub and Workspace Sync both unaffected -- neither depends on this profile |
-| Legacy `/opt/kiosk-lab` stack | *pre-existing, neither project* | `kiosk-lab-*` (Docker) + Home Assistant (host network) | 8123 (HA), 8080 (kiosk-hub), 1883 (Mosquitto, loopback only) | HTTP/MQTT | `/opt/kiosk-lab` | `docker compose`, enabled at boot | per-container healthchecks | its own secrets, unrelated | 8080 is host-bound (LAN-reachable); HA/Mosquitto are not | No | Out of scope for this work; `docs/NEXT_STEPS.md` already tracks its planned retirement |
 
 ## Shared vs. independently owned
 
 **Shared / host-level, owned by neither project specifically:**
 - The Pi itself, Docker Engine, Tailscale client, the `kiosk` system user.
 - Nothing else is actually shared -- by design. Postgres, Mosquitto, ports,
-  filesystem roots, and secrets are each owned by exactly one project. The
-  two Mosquitto brokers on this Pi (home-platform-next's, Tailscale-bound;
-  the legacy stack's, loopback-only) are **not** the same broker and were
-  deliberately left separate rather than merged -- different bind
-  addresses, different ACLs, different lifecycles, no actual port conflict.
+  filesystem roots, and secrets are each owned by exactly one project.
 
 **Owned by Workspace Sync & Backup Utility, exclusively:**
 `/opt/workspace-util`, `/etc/workspace-util`, `/mnt/workspace`,
@@ -187,10 +175,7 @@ Mosquitto broker (1883 Tailscale-bound), ports 8080/3000, the `projects`/
   restic/Syncthing state, not a SQL schema); nothing to merge.
 - Two dashboards (Workspace Sync's mobile dashboard, home-platform's
   Next.js dashboard) stay separate -- see below.
-- Two Mosquitto brokers (home-platform-next's and the legacy stack's) stay
-  separate -- merging them would mean home-platform's authenticated,
-  ACL'd broker inheriting the legacy stack's unrelated Home
-  Assistant traffic and credentials for no benefit.
+- The Platform Mosquitto broker is the sole deployed MQTT broker on this Pi.
 
 ## Mac-side services
 

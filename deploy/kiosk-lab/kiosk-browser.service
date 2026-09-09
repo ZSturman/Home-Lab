@@ -8,9 +8,10 @@ Type=simple
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 Environment=WAYLAND_DISPLAY=wayland-0
 # The graphical session is available before Docker's Home Platform dashboard.
-# Waiting here prevents an unavailable initial page. A separate legacy Kiosk
-# Hub may navigate Chromium later, so its persisted default must be `homepage`.
+# Keep the physical panel awake and portrait before starting the Platform-owned
+# browser. There is no secondary kiosk controller or browser redirect path.
 TimeoutStartSec=180
+ExecStartPre=/usr/bin/wlopm --on HDMI-A-1
 ExecStartPre=/usr/local/bin/kiosk-display portrait
 ExecStartPre=/bin/sh -c 'until /usr/bin/curl --fail --silent --max-time 2 http://127.0.0.1:3000/ >/dev/null; do sleep 2; done'
 ExecStart=/usr/bin/chromium --ozone-platform=wayland --kiosk --app=http://127.0.0.1:3000/ --no-first-run --disable-session-crashed-bubble --disable-features=Translate,MediaRouter --password-store=basic --user-data-dir=%h/.config/chromium-kiosk --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222

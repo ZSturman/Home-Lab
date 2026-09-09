@@ -38,15 +38,12 @@ those two deliberately separate concerns without coupling their databases.
    `tailscale ping kiosk-lab`, `ssh kiosk@kiosk-lab`, and request
    `https://kiosk-lab.tailef7acc.ts.net/api/v1/system/snapshot`.
 
-`bootstrap.sh` never formats disks, creates a Workspace mirror on the Pi's SD
-card, or starts the legacy kiosk stack. Workspace Sync's mount guards retain
-their fail-closed behavior.
+`bootstrap.sh` never formats disks or creates a Workspace mirror on the Pi's
+SD card. Workspace Sync's mount guards retain their fail-closed behavior.
 
-It also installs the `kiosk` user's browser policy. The browser waits for the
-local Home Platform dashboard before launching Chromium, so it does not begin
-with an unavailable page. If the separately deployed legacy Kiosk Hub remains
-installed, configure its persisted display default as `homepage`; that Hub can
-navigate Chromium after startup and is not owned by this repository.
+It also installs the `kiosk` user's browser policy. The browser wakes and
+orients the physical panel, then waits for the local Home Platform dashboard
+before launching Chromium. This is the sole kiosk browser startup path.
 
 ## Persistent-state recovery
 
@@ -58,5 +55,5 @@ navigate Chromium after startup and is not owned by this repository.
 - The Mac's real `~/Workspace` directories remain primary source files. The Pi
   stores coordination state, storage/backup state, and optional mirrors—not
   the canonical development checkout.
-- Do not restore or start `/opt/kiosk-lab` as part of this procedure. It is a
-  separately assessed legacy deployment, not a dependency of the platform.
+- Do not restore obsolete kiosk runtime directories or containers. The
+  Platform browser service is the only supported display path.
