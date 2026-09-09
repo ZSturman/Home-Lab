@@ -47,6 +47,8 @@ require_command curl
 require_command findmnt
 require_file "$platform_root/.env"
 require_file "$platform_root/docker-compose.yml"
+require_file "$platform_root/deploy/kiosk-lab/kiosk-browser.service"
+require_file "$platform_root/deploy/kiosk-lab/kiosk-browser.desktop"
 require_file "$workspace_util_root/services/pi/workspace-dashboard.service"
 require_file /etc/workspace-util/config.yaml
 require_file /etc/workspace-util/secrets.env
@@ -73,6 +75,13 @@ systemctl daemon-reload
 # absent. The backup timer is fail-closed: its guard refuses an unmounted HDD.
 systemctl enable --now workspace-dashboard.service
 systemctl enable --now workspace-backup.timer workspace-backup-retention.timer workspace-backup-check.timer
+
+echo '== Installing kiosk browser startup policy =='
+kiosk_home="$(getent passwd "$run_user" | cut -d: -f6)"
+[[ -n "$kiosk_home" ]] || { echo "Could not resolve home directory for $run_user" >&2; exit 66; }
+install -d -m 0755 -o "$run_user" -g "$run_user" "$kiosk_home/.config/systemd/user" "$kiosk_home/.config/autostart"
+install -m 0644 -o "$run_user" -g "$run_user" "$platform_root/deploy/kiosk-lab/kiosk-browser.service" "$kiosk_home/.config/systemd/user/kiosk-browser.service"
+install -m 0644 -o "$run_user" -g "$run_user" "$platform_root/deploy/kiosk-lab/kiosk-browser.desktop" "$kiosk_home/.config/autostart/kiosk-browser.desktop"
 
 echo '== Starting Home Platform =='
 docker compose --env-file .env up -d --build

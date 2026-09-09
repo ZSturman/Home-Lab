@@ -42,6 +42,10 @@ those two deliberately separate concerns without coupling their databases.
 card, or starts the legacy kiosk stack. Workspace Sync's mount guards retain
 their fail-closed behavior.
 
+It also installs the `kiosk` user's browser policy. The browser waits for the
+local Home Platform dashboard before launching Chromium, so an early boot
+cannot restore a stale Home Assistant kiosk page from Chromium's profile.
+
 ## Persistent-state recovery
 
 - Restore the Home Platform Postgres bind-mounted `data/postgres/` only while

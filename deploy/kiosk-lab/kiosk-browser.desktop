@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Home Platform Kiosk Browser
+Comment=Start the supervised Home Platform browser after the Wayland session exists
+Exec=/usr/bin/systemctl --user start kiosk-browser.service
+Terminal=false
+X-GNOME-Autostart-enabled=true

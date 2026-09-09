@@ -1,0 +1,22 @@
+[Unit]
+Description=Home Platform Chromium kiosk browser
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=WAYLAND_DISPLAY=wayland-0
+# The graphical session is available before Docker's Home Platform dashboard.
+# Waiting here prevents Chromium from restoring a stale Home Assistant page
+# when its requested kiosk URL is temporarily unreachable at boot.
+TimeoutStartSec=180
+ExecStartPre=/usr/local/bin/kiosk-display portrait
+ExecStartPre=/bin/sh -c 'until /usr/bin/curl --fail --silent --max-time 2 http://127.0.0.1:3000/ >/dev/null; do sleep 2; done'
+ExecStart=/usr/bin/chromium --ozone-platform=wayland --kiosk --app=http://127.0.0.1:3000/ --no-first-run --disable-session-crashed-bubble --disable-features=Translate,MediaRouter --password-store=basic --user-data-dir=%h/.config/chromium-kiosk --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222
+Restart=always
+RestartSec=3
+KillMode=mixed
+
+[Install]
+WantedBy=graphical-session.target
