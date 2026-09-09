@@ -622,7 +622,12 @@ async def get_tailnet_status(session: AsyncSession = Depends(get_session)) -> di
          "health": record.health, "last_seen_at": record.last_seen_at.isoformat() if record.last_seen_at else None}
         for record in records
     ]
-    return await fetch_tailnet_status(agents=agents)
+    payload = await fetch_tailnet_status(agents=agents)
+    # This endpoint being served is direct, current evidence that the local
+    # control-plane API is healthy. It is intentionally separate from MQTT
+    # agent records and tailnet peer connectivity.
+    payload["local_platform_service"] = {"state": "healthy", "observed_at": utc_now().isoformat()}
+    return payload
 
 
 @app.get("/api/v1/projects")

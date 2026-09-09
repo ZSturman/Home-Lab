@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 
 import httpx
 
@@ -45,25 +46,21 @@ UNKNOWN_STATUS: dict = {
         "warning": "Workspace Sync Utility unreachable or not configured.",
     },
     "backup_destination": None,
+    "transport": {"state": "unavailable", "last_success_at": None},
 }
 
+_last_known_workspace_status: dict | None = None
 
-def _backup_destination(status: dict) -> dict | None:
-    """Extract backup-HDD facts, not the separate Workspace mirror mode."""
-    storage = status.get("storage") if isinstance(status, dict) else None
-    backup = storage.get("backup") if isinstance(storage, dict) else None
-    if not isinstance(backup, dict) or not isinstance(backup.get("total"), int):
+
+async def _fetch_json(client: httpx.AsyncClient, url: str, headers: dict) -> dict | None:
+    try:
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, dict) else None
+    except Exception as exc:  # isolated per upstream contract
+        logger.warning("workspace status component unavailable (%s): %r", url.rsplit("/", 1)[-1], exc)
         return None
-    checks = status.get("checks") if isinstance(status, dict) else []
-    disk_check = next((check for check in checks if isinstance(check, dict) and "backup" in str(check.get("name", "")).lower() and "disk" in str(check.get("name", "")).lower()), None)
-    return {
-        "mounted": bool(disk_check and disk_check.get("status") == "ok"),
-        "detail": disk_check.get("detail") if isinstance(disk_check, dict) else "Backup destination capacity reported",
-        "used_bytes": backup.get("used"), "total_bytes": backup.get("total"),
-        "available_bytes": backup.get("total") - backup.get("used", 0),
-        "snapshots": (status.get("backup") or {}).get("snapshots") if isinstance(status.get("backup"), dict) else None,
-        "last_snapshot_at": (status.get("backup") or {}).get("last") if isinstance(status.get("backup"), dict) else None,
-    }
 
 
 async def fetch_storage_contract() -> dict:
@@ -98,24 +95,31 @@ async def fetch_workspace_status() -> dict:
     if settings.workspace_contract_token_value:
         headers["X-Workspace-Token"] = settings.workspace_contract_token_value
     base_url = settings.workspace_contract_url.rsplit("/api/storage/contract", 1)[0]
+    global _last_known_workspace_status
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            storage_response, backup_response, status_response = await asyncio.gather(
-                client.get(f"{base_url}/api/storage/contract", headers=headers),
-                client.get(f"{base_url}/api/backup/status", headers=headers),
-                client.get(f"{base_url}/api/status", headers=headers),
+            storage, backup, destination = await asyncio.gather(
+                _fetch_json(client, f"{base_url}/api/storage/contract", headers),
+                _fetch_json(client, f"{base_url}/api/backup/status", headers),
+                _fetch_json(client, f"{base_url}/api/backup/destination", headers),
             )
-            storage_response.raise_for_status()
-            backup_response.raise_for_status()
-            status_response.raise_for_status()
-            return {"storage": storage_response.json(), "backup": backup_response.json(), "backup_destination": _backup_destination(status_response.json())}
-    except Exception as exc:  # noqa: BLE001 -- storage failure must degrade
-        logger.warning("workspace status unreachable: %s", exc)
-        return {
-            **UNKNOWN_STATUS,
-            "storage": {**UNKNOWN_CONTRACT, "detail": f"unreachable: {exc}"},
-            "backup": {**UNKNOWN_STATUS["backup"], "warning": f"unreachable: {exc}"},
-        }
+    except Exception as exc:  # noqa: BLE001 -- client construction failures are still isolated
+        logger.warning("workspace status transport setup unavailable: %r", exc)
+        storage = backup = destination = None
+    now = time.time()
+    previous = _last_known_workspace_status or UNKNOWN_STATUS
+    result = {
+        "storage": storage or previous["storage"],
+        "backup": backup or previous["backup"],
+        "backup_destination": destination or previous.get("backup_destination"),
+        "transport": {"state": "connected" if backup else "delayed" if previous is not UNKNOWN_STATUS else "unavailable",
+                      "last_success_at": now if backup else previous.get("transport", {}).get("last_success_at")},
+    }
+    # The backup document is authoritative job state. Cache only complete
+    # successful backup reads, never an unknown fallback produced by transport.
+    if backup:
+        _last_known_workspace_status = result
+    return result
 
 
 async def is_directory_creation_allowed_for_node(node_id: str) -> bool:

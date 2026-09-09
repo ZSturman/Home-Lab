@@ -26,6 +26,10 @@ function bytes(value: number | null | undefined) {
   return `${amount.toFixed(unit < 3 ? 0 : 1)} ${units[unit]}`;
 }
 
+function epochTime(value: number | null | undefined) {
+  return typeof value === "number" ? shortTime(new Date(value * 1000).toISOString()) : "Not reported";
+}
+
 export function Dashboard({ platformName }: { platformName: string }) {
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
   const [error, setError] = useState<string | null>(null);
@@ -117,7 +121,17 @@ export function Dashboard({ platformName }: { platformName: string }) {
     const readStatus = async () => {
       try {
         const response = await fetch("/api/v1/storage/status", { cache: "no-store" });
-        if (response.ok && !cancelled) setWorkspaceStatus(await response.json());
+        if (response.ok && !cancelled) {
+          const next = await response.json();
+          setWorkspaceStatus((previous) => {
+            // A transient 200/unknown proxy response is transport state, not
+            // authoritative evidence that a known backup stopped.
+            if (next.backup?.state === "unknown" && previous?.backup?.state && previous.backup.state !== "unknown") {
+              return { ...previous, transport: { state: "delayed", last_success_at: previous.transport?.last_success_at } };
+            }
+            return next;
+          });
+        }
       } catch {
         // The primary dashboard remains useful if the sibling storage service is unavailable.
       }
@@ -199,7 +213,7 @@ export function Dashboard({ platformName }: { platformName: string }) {
 
         <section className="status-grid" aria-label="System state">
           <article className="card emphasis"><p>Control Plane</p><strong>Online</strong><span>{runtime.node_name} · {runtime.hardware_profile === "pi-hardware" ? "hardware profile" : "standard profile"}</span></article>
-          <article className="card"><p>Nodes</p><strong>{snapshot.nodes.filter((node) => node.status === "online").length}/{Math.max(snapshot.nodes.length, 2)}</strong><span>Online Nodes</span></article>
+          <article className="card"><p>Tailnet devices</p><strong>{tailnetStatus?.devices?.filter((device: any) => device.online).length ?? "…"}/{tailnetStatus?.devices?.length ?? "…"}</strong><span>Live Tailscale connectivity</span></article>
           <article className="card"><p>Attention</p><strong>{snapshot.alerts.length}</strong><span>Active messages</span></article>
           <article className="card"><p>Status indicators</p><strong>{Object.values(snapshot.led).filter((led) => led.mode !== "off").length}</strong><span>Active physical LEDs</span></article>
         </section>
@@ -207,28 +221,35 @@ export function Dashboard({ platformName }: { platformName: string }) {
         <section className="panel">
           <div className="panel-heading"><div><p className="eyebrow">Workspace Sync</p><h2>Backup protection</h2></div></div>
           {workspaceStatus ? <div className="list">
-            <article className="list-row"><span className={`status-dot ${workspaceStatus.backup?.state === "completed" || workspaceStatus.backup?.state === "running" ? "online" : "offline"}`} /><div><strong>{workspaceStatus.backup?.active ? "Backup running" : workspaceStatus.backup?.state === "completed" ? "Last backup completed" : `Backup ${workspaceStatus.backup?.state ?? "unknown"}`}</strong><p>{workspaceStatus.backup?.stage ?? "waiting"}{workspaceStatus.backup?.percent_done != null ? ` · ${(workspaceStatus.backup.percent_done * 100).toFixed(1)}%` : ""}</p></div><span className="pill">{workspaceStatus.backup?.state ?? "unknown"}</span></article>
-            {workspaceStatus.backup?.percent_done != null && <div className="progress" aria-label="Backup progress"><span style={{ width: `${Math.max(0, Math.min(100, workspaceStatus.backup.percent_done * 100))}%` }} /></div>}
-            <p className="description">{workspaceStatus.backup?.files_processed != null ? `${workspaceStatus.backup.files_processed.toLocaleString()} / ${workspaceStatus.backup.files_total?.toLocaleString?.() ?? "?"} files · ` : ""}{workspaceStatus.backup?.bytes_processed != null ? `${bytes(workspaceStatus.backup.bytes_processed)} / ${bytes(workspaceStatus.backup.bytes_total)} · ` : ""}last progress {shortTime(workspaceStatus.backup?.last_progress_at ? new Date(workspaceStatus.backup.last_progress_at * 1000).toISOString() : null)}</p>
-            <p className="description">External backup disk: {workspaceStatus.backup_destination?.mounted ? "mounted" : "state unavailable"} · {bytes(workspaceStatus.backup_destination?.total_bytes)} total · {bytes(workspaceStatus.backup_destination?.available_bytes)} available. {workspaceStatus.backup_destination?.detail ?? ""}</p>
-            {workspaceStatus.storage?.mode && <p className="description">Workspace mirror: {workspaceStatus.storage.mode} — {workspaceStatus.storage.storage_health_detail ?? "not configured"}. This is separate from backup storage.</p>}
+            <article className="list-row"><span className={`status-dot ${workspaceStatus.backup?.state === "completed" || workspaceStatus.backup?.state === "running" ? "online" : "offline"}`} /><div><strong>Backup: {workspaceStatus.backup?.state ?? "unknown"}</strong><p>Mac restic process → Mac monitor → Workspace Sync → Home Platform</p></div><span className="pill">{workspaceStatus.backup?.state ?? "unknown"}</span></article>
+            <p className="description">Process heartbeat: <strong>{workspaceStatus.backup?.process?.state ?? "unknown"}</strong> · PID {workspaceStatus.backup?.process?.pid ?? "not reported"} · last heartbeat {epochTime(workspaceStatus.backup?.process?.last_heartbeat_at)}.</p>
+            <p className="description">Latest captured progress: {workspaceStatus.backup?.progress?.percent_done != null ? `${(workspaceStatus.backup.progress.percent_done * 100).toFixed(2)}%` : "unavailable"} · telemetry: <strong>{workspaceStatus.backup?.progress?.state ?? "unavailable"}</strong> · last progress event {epochTime(workspaceStatus.backup?.progress?.last_event_at)}.</p>
+            {workspaceStatus.backup?.progress?.percent_done != null && <div className={`progress ${workspaceStatus.backup.progress.state !== "current" ? "stale" : ""}`} aria-label="Latest captured backup progress"><span style={{ width: `${Math.max(0, Math.min(100, workspaceStatus.backup.progress.percent_done * 100))}%` }} /></div>}
+            <p className="description">Status connection: <strong>{workspaceStatus.transport?.state ?? "unknown"}</strong> · last successful backup status {epochTime(workspaceStatus.transport?.last_success_at)}.</p>
+            <p className="description">External backup disk: <strong>{workspaceStatus.backup_destination?.state ?? "unavailable"}</strong> · {workspaceStatus.backup_destination?.device ?? "device unavailable"} · UUID {workspaceStatus.backup_destination?.uuid ?? "unknown"} · {workspaceStatus.backup_destination?.filesystem ?? "unknown"} · {workspaceStatus.backup_destination?.mount ?? "mount unavailable"}.</p>
+            <p className="description">Repository: <code>{workspaceStatus.backup_destination?.repository ?? workspaceStatus.backup?.destination ?? "unavailable"}</code> · repository check: {workspaceStatus.backup_destination?.repository_state ?? "unknown"} · {bytes(workspaceStatus.backup_destination?.usage?.available_bytes)} available.</p>
             {(workspaceStatus.backup?.warning || workspaceStatus.backup?.error) && <p className="description">{workspaceStatus.backup.warning ?? workspaceStatus.backup.error}</p>}
           </div> : <p className="empty">Reading Workspace Sync status…</p>}
         </section>
 
         <section className="panel">
+          <div className="panel-heading"><div><p className="eyebrow">Workspace Sync</p><h2>Workspace mirror</h2></div><span className="pill">{workspaceStatus?.storage?.mode ?? "unknown"}</span></div>
+          <p className="description">{workspaceStatus?.storage?.storage_health_detail ?? "Workspace mirror status is unavailable."}</p>
+        </section>
+
+        <section className="panel">
           <div className="panel-heading"><div><p className="eyebrow">Tailscale</p><h2>Tailnet devices</h2></div><span className="pill">{tailnetStatus?.state ?? "reading"}</span></div>
           {tailnetStatus ? <div className="list">{tailnetStatus.devices?.length ? tailnetStatus.devices.map((device: any) => (
-            <article className="list-row tailnet-device" key={device.id}><span className={`status-dot ${device.online ? "online" : "offline"}`} /><div><strong>{device.name}{device.local ? " · this Pi" : ""}</strong><p>Tailnet: {device.online ? "online" : "offline"} · {device.os} · {device.ips?.[0] ?? "no IP"} · last seen {shortTime(device.last_seen_at)}</p><p>{device.dns_name ?? "MagicDNS unavailable"} · {device.transport}{device.platform_agent ? ` · Platform agent: ${device.platform_agent.status}` : " · Platform agent: not installed"}</p></div><span className="pill">{device.online ? "online" : "offline"}</span></article>
+            <article className="list-row tailnet-device" key={device.id}><span className={`status-dot ${device.online ? "online" : "offline"}`} /><div><strong>{device.name}{device.local ? " · this Pi" : ""}</strong><p>Tailnet: {device.online ? "online" : "offline"} · {device.os} · {device.ips?.[0] ?? "no IP"} · last seen {shortTime(device.last_seen_at)}</p><p>{device.dns_name ?? "MagicDNS unavailable"} · {device.transport}{device.platform_agent ? ` · Platform agent: ${device.platform_agent.status}` : " · Platform agent: not installed"}{device.local ? ` · Home Platform: ${tailnetStatus.local_platform_service?.state ?? "unknown"} · Workspace Sync: ${workspaceStatus?.transport?.state ?? "unknown"}` : ""}</p></div><span className="pill">{device.online ? "online" : "offline"}</span></article>
           )) : <p className="empty">No tailnet devices reported.</p>}{tailnetStatus.warnings?.map((warning: string) => <p className="description" key={warning}>{warning}</p>)}</div> : <p className="empty">Reading Tailscale state…</p>}
         </section>
 
         <div className="column-grid">
           <section className="panel">
-            <div className="panel-heading"><div><p className="eyebrow">Nodes</p><h2>Connected systems</h2></div></div>
+            <div className="panel-heading"><div><p className="eyebrow">Home Platform</p><h2>Platform agents</h2></div></div>
             <div className="list">{snapshot.nodes.length ? snapshot.nodes.map((node) => (
-              <article className="list-row" key={node.id}><span className={`status-dot ${node.status}`} /><div><strong>{node.name}</strong><p>{node.health} · last seen {shortTime(node.last_seen_at)}</p></div><span className="pill">{label(node.status)}</span></article>
-            )) : <p className="empty">Waiting for Nodes to report Actual State.</p>}</div>
+              <article className="list-row" key={node.id}><span className={`status-dot ${node.status}`} /><div><strong>{node.name}</strong><p>Agent heartbeat: {node.status} · health: {node.health} · last seen {shortTime(node.last_seen_at)}</p></div><span className="pill">agent {label(node.status)}</span></article>
+            )) : <p className="empty">No Home Platform agents have reported.</p>}</div>
           </section>
 
           <section className="panel">

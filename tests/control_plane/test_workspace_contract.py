@@ -3,6 +3,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
+import app.workspace_contract as workspace_contract
+
 from app.api import app, lifespan
 from app.settings import get_settings
 from app.workspace_contract import (
@@ -19,8 +21,10 @@ def _clear_settings_cache():
     env vars, so the cache must be dropped before and after or tests leak
     into each other (and into every other test module in the run)."""
     get_settings.cache_clear()
+    workspace_contract._last_known_workspace_status = None
     yield
     get_settings.cache_clear()
+    workspace_contract._last_known_workspace_status = None
 
 
 @pytest.mark.asyncio
@@ -101,17 +105,25 @@ async def test_storage_status_endpoint_never_errors_when_unconfigured(monkeypatc
     assert r.json()["storage"]["mode"] == "unknown"
 
 
-def test_backup_destination_is_not_workspace_test_mode():
-    from app.workspace_contract import _backup_destination
+@pytest.mark.asyncio
+async def test_workspace_status_keeps_authoritative_backup_when_auxiliary_transport_fails(monkeypatch):
+    monkeypatch.setenv("WORKSPACE_CONTRACT_URL", "http://workspace.example/api/storage/contract")
+    calls = {"healthy": True}
 
-    destination = _backup_destination({
-        "storage": {"backup": {"used": 2_200, "total": 4_600}},
-        "checks": [{"name": "Backup disk", "status": "ok", "detail": "mounted /dev/sda2"}],
-        "backup": {"snapshots": 3, "last": "2026-09-08T18:00:00Z"},
-        "workspace_state": {"mode": "test"},
-    })
-    assert destination == {
-        "mounted": True, "detail": "mounted /dev/sda2", "used_bytes": 2_200,
-        "total_bytes": 4_600, "available_bytes": 2_400, "snapshots": 3,
-        "last_snapshot_at": "2026-09-08T18:00:00Z",
-    }
+    async def fake_fetch(_client, url, _headers):
+        if not calls["healthy"]:
+            return None
+        if url.endswith("/api/backup/status"):
+            return {"state": "running", "active": True, "process": {"state": "alive"}}
+        if url.endswith("/api/backup/destination"):
+            return {"state": "mounted", "device": "/dev/sda2"}
+        return {"mode": "test"}
+
+    monkeypatch.setattr(workspace_contract, "_fetch_json", fake_fetch)
+    initial = await fetch_workspace_status()
+    calls["healthy"] = False
+    delayed = await fetch_workspace_status()
+    assert initial["backup"]["state"] == "running"
+    assert delayed["backup"]["state"] == "running"
+    assert delayed["transport"]["state"] == "delayed"
+    assert delayed["backup_destination"]["device"] == "/dev/sda2"
