@@ -43,8 +43,10 @@ card, or starts the legacy kiosk stack. Workspace Sync's mount guards retain
 their fail-closed behavior.
 
 It also installs the `kiosk` user's browser policy. The browser waits for the
-local Home Platform dashboard before launching Chromium, so an early boot
-cannot restore a stale Home Assistant kiosk page from Chromium's profile.
+local Home Platform dashboard before launching Chromium, so it does not begin
+with an unavailable page. If the separately deployed legacy Kiosk Hub remains
+installed, configure its persisted display default as `homepage`; that Hub can
+navigate Chromium after startup and is not owned by this repository.
 
 ## Persistent-state recovery
 
