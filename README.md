@@ -1,5 +1,11 @@
 # Home Platform
 
+![Actual automation cancellation](../docs/images/functional-home-lab-stop.jpg)
+
+## Functional state — October 6, 2026
+
+Full isolated dashboard/API/Mac-handler flows are in the [parent functional audit](../docs/FUNCTIONAL_AUDIT.md). Real directories, initialization, durable replay, safe completion/Stop and restart persistence passed after routing, UTC and cancellation fixes. Live MQTT/Watcher/Notion/Home Assistant/Pi and physical Safari remain unverified. This is an active incomplete utility; the [parent README](../README.md) separates platforms, and [next steps](../docs/NEXT_STEPS.md) records the primary integration action.
+
 Home Platform is a private, Tailscale-only control interface and Control Plane
 for the home lab. The Raspberry Pi currently hosts the hardware profile, while
 the portable Control Plane role can run on a Mac or another Docker host.
@@ -34,3 +40,17 @@ and [kiosk-lab provisioning](deploy/kiosk-lab/README.md).
 
 The deployment binds the Dashboard to loopback. Pi access is provided through
 Tailscale Serve, not an Internet-facing application port.
+
+## Home Platform vNext
+
+The production dashboard uses a shared Control Plane overview for Now, Home,
+Projects, Learn, Media, AI, Files, Automations, Data, and System. It never
+uses sample data: missing integrations are explicitly shown as unavailable.
+
+- [Discovery report](docs/discovery-2026-09-10.md)
+- [Design plan](docs/design-plan.md)
+- [View catalog](docs/views.md)
+- [Integration catalog](docs/integrations.md)
+- [Testing matrix](docs/testing.md)
+- [Acceptance report](docs/acceptance-2026-09-10.md)
+- [Follow-up work](docs/future-work.md)

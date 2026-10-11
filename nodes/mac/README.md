@@ -17,7 +17,7 @@ This service also owns `~/Workspace/Projects`: it executes three additional
 allowlisted commands (`project.create_directory`, `project.initialize`,
 `workspace.scan` -- typed operations only, never an arbitrary shell string),
 and reports a read-only snapshot of
-[Workspace Watcher](../../../Workspace%20Watcher)'s project registry as part
+[Workspace Watcher](../../../../Workspace%20Watcher)'s project registry as part
 of its normal 30s Actual State report. It also polls
 `GET {HOMEPLATFORM_API_URL}/api/v1/projects/jobs/pending` every 30s and on
 receipt of a retained `homeplatform/v1/projects/jobs-available` MQTT ping --

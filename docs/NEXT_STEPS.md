@@ -16,11 +16,10 @@ Project Hub migration is present in the live database. Workspace Sync's
 dashboard, timers, Syncthing, kiosk host services, Home Assistant, and the
 legacy `/opt/kiosk-lab` Compose stack also recovered.
 
-Two hardware-profile containers were not healthy at that observation:
-`home-platform-next-kiosk-controller-1` was only **Created**, and
-`home-platform-next-go2rtc-1` had exited four days earlier. They are not
-dependencies of Project Hub or Workspace Sync and must not be silently
-promoted as healthy in UI or documentation.
+The `home-platform-next-go2rtc-1` hardware-profile container had exited four
+days earlier. It is not a dependency of Project Hub or Workspace Sync and must
+not be silently promoted as healthy in UI or documentation. The Arduino
+controller was retired from source on 2026-09-12.
 
 The backup HDD was mounted eventually and an hourly restic backup succeeded,
 but the first backup guard after boot failed because the mount was absent.
@@ -40,9 +39,8 @@ action, then run `deploy/kiosk-lab/verify.sh` and record its output.
    `/opt/home-platform` checkout and use `deploy/kiosk-lab/bootstrap.sh` only
    after the Pi is reachable and secrets are restored.
 3. Verify the external HDD's UUID mount persistence and repeat a reboot test.
-4. Investigate the stopped `go2rtc` and never-started kiosk-controller profile
-   only if the corresponding camera/Arduino hardware is still intended to be
-   part of the live platform.
+4. Investigate the stopped `go2rtc` profile only if the camera hardware is
+   still intended to be part of the live platform.
 5. Keep the legacy `/opt/kiosk-lab` stack separate until a dedicated Home
    Assistant MQTT/kiosk migration proves it can be retired.
 
@@ -56,10 +54,8 @@ The first vertical slice runs on the Pi at
 - API and PostgreSQL: internal Docker network only.
 - Authenticated Platform MQTT: `100.90.61.70:1883` over Tailscale. The Mac
   Node is reconnected on this canonical port.
-- `kiosk-controller` directly owns the Arduino Mega at `/dev/ttyACM0`. It has
-  verified the installed KIOSK/1 firmware (`firmware=2`, `capabilities=leds`),
-  publishes retained Node state and device Events, and receives retained Alert
-  LED state.
+- The Arduino controller described in earlier recovery notes was retired from
+  source on 2026-09-12; it is not part of the supported deployment.
 - Home Assistant authentication, the configured living-room entity read, and a
   no-op brightness service call have passed. The entity reports a 2000–6535 K
   range. The Dashboard/API, safe Automation Run, and Mac Node presence have
@@ -80,8 +76,8 @@ that remaining old broker requires a separate Home Assistant MQTT migration.
 
 The same base Compose stack now has an explicit host identity and a portable
 `standard` profile. It can be moved to macOS for the Dashboard, API,
-automation, MQTT, and Mac Node capabilities; the Pi-only Arduino and webcam
-services start only with the `pi-hardware` profile.
+automation, MQTT, and Mac Node capabilities; the Pi-only webcam services
+start only with the `pi-hardware` profile.
 
 ## Mac portable instance
 
@@ -95,19 +91,13 @@ authoritative host.
 
 ## Current acceptance remaining
 
-1. Move the joystick once in each direction, tap the stick, then hold it for
-   at least one second. Confirm the resulting Home Assistant changes and
-   Platform Events. The controller's configuration mount is now in place;
-   these input actions are live against the living-room lights. Green-only is
-   the expected normal LED state; it confirms the Platform ping and LED frame
-   are reaching the Arduino.
-2. The Brio snapshot has passed from a second Tailnet device and the Platform
+1. The Brio snapshot has passed from a second Tailnet device and the Platform
    reports a healthy producer. Keep go2rtc out of Tailscale Serve and
    Cloudflare; a physical viewing/client-quality check can be repeated when an
    observer is at the Pi.
-3. Migrate or intentionally retire the old Home Assistant MQTT package before
-   stopping its old broker. Do not remove the Arduino firmware or Home
-   Assistant configuration before that migration.
+2. Migrate or intentionally retire the old Home Assistant MQTT package before
+   stopping its old broker. The Arduino firmware and Platform controller have
+   already been retired from the supported deployment.
 
 ## Historical Project Hub cutover checklist
 

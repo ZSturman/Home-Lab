@@ -23,9 +23,9 @@ services deliberately:
 docker compose --profile pi-hardware up -d --build
 ```
 
-That profile includes `kiosk-controller`, go2rtc, and `media-controller`. The
-USB mappings are configured through `KIOSK_HOST_DEVICE` and
-`WEBCAM_HOST_DEVICE`; do not enable this profile on macOS Docker Desktop.
+That profile includes go2rtc and `media-controller`. Its USB mapping is
+configured through `WEBCAM_HOST_DEVICE`; do not enable this profile on macOS
+Docker Desktop.
 
 On a Mac hosting the Control Plane, use a stable Node id already represented
 in `config/nodes.yaml` (currently `macbook`), for example:

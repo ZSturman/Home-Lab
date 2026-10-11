@@ -41,9 +41,11 @@ those two deliberately separate concerns without coupling their databases.
 `bootstrap.sh` never formats disks or creates a Workspace mirror on the Pi's
 SD card. Workspace Sync's mount guards retain their fail-closed behavior.
 
-It also installs the `kiosk` user's browser policy. The browser wakes and
-orients the physical panel, then waits for the local Home Platform dashboard
-before launching Chromium. This is the sole kiosk browser startup path.
+It currently preserves the `kiosk` user's browser policy because the live Pi
+unit was installed on 2026-09-09 and started on 2026-09-10. It displays Home
+Platform at loopback port 3000. Decide its separate remote decommissioning
+only after confirming that this recent physical-display use is no longer
+intentional.
 
 ## Persistent-state recovery
 
@@ -55,5 +57,6 @@ before launching Chromium. This is the sole kiosk browser startup path.
 - The Mac's real `~/Workspace` directories remain primary source files. The Pi
   stores coordination state, storage/backup state, and optional mirrors—not
   the canonical development checkout.
-- Do not restore obsolete kiosk runtime directories or containers. The
-  Platform browser service is the only supported display path.
+- Do not restore obsolete Kiosk Lab runtime directories or controllers. Keep
+  the tracked browser policy only until the recently deployed live unit is
+  explicitly decommissioned.

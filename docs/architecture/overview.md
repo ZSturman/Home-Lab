@@ -7,7 +7,6 @@ Trusted browser ── Tailscale Serve ── Next.js Dashboard ── FastAPI A
                                                    │             │
                            Automation Controller ──┘             ├── Mac Node Service
                                                                  ├── Home Assistant integration
-                                                                 ├── Native Arduino kiosk controller
                                                                  └── Private Brio webcam (go2rtc)
 ```
 
@@ -31,11 +30,6 @@ PostgreSQL. MQTT remains the internal state and command bus.
 - `control-plane-api`: REST and browser WebSocket API; separate from scheduling.
 - `automation-controller`: durable Automation Run executor.
 - `dashboard`: loopback-only Next.js private UI.
-- `kiosk-controller`: the Platform-owned owner of the Arduino Mega USB serial
-  device. It validates KIOSK/1 packets, publishes Platform device Events,
-  applies retained Alert LED state, and invokes the configured light actions.
-  It is restricted to its own MQTT state/input topics and has no legacy-broker
-  network connection.
 - `go2rtc`: private webcam ingress and streaming. Its API, RTSP, and WebRTC
   ports bind to the Pi Tailscale address only; they are not Serve or Cloudflare
   targets.
@@ -43,7 +37,7 @@ PostgreSQL. MQTT remains the internal state and command bus.
   Service. It starts only with the `pi-hardware` Compose profile.
 
 The base Compose profile is hardware-neutral and may run on macOS. The
-`pi-hardware` profile explicitly adds the Arduino and USB webcam services;
+`pi-hardware` profile explicitly adds the USB webcam services;
 see [host profiles](../operations/host-profiles.md).
 
 ## State rules

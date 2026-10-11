@@ -13,5 +13,3 @@ tailscale serve status
 - A Dashboard outage must not stop Automation Controller or Control Plane Core.
 - An unavailable Home Assistant token affects only lights and Home Assistant
   Devices; it must not block MQTT, Nodes, or Automations.
-- Do not run a second process against `/dev/ttyACM0`; use the native
-  `kiosk-controller` service.
