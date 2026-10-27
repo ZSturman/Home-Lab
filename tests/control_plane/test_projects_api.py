@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from datetime import datetime, timedelta
 
 import httpx
 import pytest
@@ -110,8 +111,32 @@ async def test_pending_jobs_endpoint_is_the_macs_poll_target(client, session, fa
     assert len(jobs) == 1
     assert jobs[0]["command_type"] == "project.create_directory"
 
+    # A reloaded expiry must compare with the node's aware UTC clock.
+    expiry = datetime.fromisoformat(jobs[0]["expires_at"])
+    assert expiry.tzinfo is not None
+    assert expiry.utcoffset() == timedelta(0)
+
     other_node = await client.get("/api/v1/projects/jobs/pending", params={"node_id": "some-other-node"})
     assert other_node.json() == []
+
+
+@pytest.mark.asyncio
+async def test_job_collection_is_not_shadowed_by_project_detail(client, session, fake_notion) -> None:
+    created = await client.post("/api/v1/projects", json={
+        "name": "Job Collection", "template": "empty",
+        "idempotency_key": "job-collection-key", "source": "other",
+    })
+    jobs = await client.get("/api/v1/projects/jobs")
+    assert jobs.status_code == 200
+    assert len(jobs.json()) == 1
+    assert jobs.json()[0]["payload"]["project_id"] == created.json()["id"]
+
+    detail = await client.get(f"/api/v1/projects/{created.json()['id']}")
+    assert detail.status_code == 200
+    assert detail.json()["jobs"][0]["id"] == jobs.json()[0]["id"]
+    assert datetime.fromisoformat(detail.json()["updated_at"]).utcoffset() == timedelta(0)
+    missing = await client.get("/api/v1/projects/not-a-real-project")
+    assert missing.status_code == 404
 
 
 @pytest.mark.asyncio

@@ -12,15 +12,8 @@ for path in /run/homeplatform/mosquitto.conf /run/homeplatform/acl /run/secrets/
   fi
 done
 
-case "${HOMEPLATFORM_KIOSK_NODE_ID:-}" in
-  ''|*[!a-z0-9-]*)
-    echo "HOMEPLATFORM_KIOSK_NODE_ID must be a lowercase node identifier" >&2
-    exit 1
-    ;;
-esac
-
 cp /run/homeplatform/mosquitto.conf /mosquitto/config/mosquitto.conf
-sed "s/__KIOSK_NODE_ID__/${HOMEPLATFORM_KIOSK_NODE_ID}/g" /run/homeplatform/acl >/mosquitto/config/acl
+cp /run/homeplatform/acl /mosquitto/config/acl
 cp /run/secrets/mosquitto_password_database /mosquitto/config/mosquitto.passwd
 chown mosquitto:mosquitto /mosquitto/config/mosquitto.conf /mosquitto/config/acl /mosquitto/config/mosquitto.passwd
 chmod 600 /mosquitto/config/mosquitto.conf /mosquitto/config/acl /mosquitto/config/mosquitto.passwd

@@ -32,8 +32,6 @@ services:
     build:
       context: ./infrastructure/mosquitto
     restart: unless-stopped
-    environment:
-      HOMEPLATFORM_KIOSK_NODE_ID: ${HOMEPLATFORM_NODE_ID:-pi-control-plane}
     ports:
       - "${MQTT_BIND_IP}:${MQTT_BIND_PORT:-1883}:1883"
     volumes:
@@ -142,32 +140,6 @@ services:
       control-plane-api:
         condition: service_started
 
-  kiosk-controller:
-    build:
-      context: ./control-plane
-    command: ["python", "-m", "devices.kiosk.service"]
-    restart: unless-stopped
-    profiles: ["pi-hardware"]
-    env_file: ${HOMEPLATFORM_RUNTIME_ENV_FILE:-.env}
-    environment:
-      SERVICE_NAME: kiosk-controller
-      MQTT_USERNAME: kiosk-controller
-      MQTT_PASSWORD_FILE: /run/secrets/mqtt_kiosk_controller_password
-      HOME_ASSISTANT_TOKEN_FILE: /run/secrets/home_assistant_token
-      HOMEPLATFORM_NODE_HOSTNAME: ${HOMEPLATFORM_NODE_HOSTNAME:-kiosk-lab}
-    secrets:
-      - mqtt_kiosk_controller_password
-      - home_assistant_token
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    devices:
-      - ${KIOSK_HOST_DEVICE:-/dev/ttyACM0}:${KIOSK_CONTROLLER_PORT:-/dev/ttyACM0}
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-    volumes:
-      - ./config:/app/config:ro
-
   go2rtc:
     image: alexxit/go2rtc:1.9.14
     restart: unless-stopped
@@ -212,8 +184,6 @@ secrets:
     file: ./secrets/postgres_password
   mqtt_control_plane_password:
     file: ./secrets/mqtt_control_plane_password
-  mqtt_kiosk_controller_password:
-    file: ./secrets/mqtt_kiosk_controller_password
   mqtt_health_password:
     file: ./secrets/mqtt_health_password
   home_assistant_token:

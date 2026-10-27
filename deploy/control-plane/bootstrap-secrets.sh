@@ -22,7 +22,6 @@ new_secret() {
 new_secret postgres_password
 new_secret mqtt_control_plane_password
 new_secret mqtt_macbook_password
-new_secret mqtt_kiosk_controller_password
 new_secret mqtt_health_password
 
 # Home Assistant is explicitly opt-in. Put the least-privilege token in this
@@ -54,7 +53,6 @@ if [ ! -f secrets/mosquitto.passwd ]; then
     password() { tr -d "\\r\\n" <"/secrets/$1"; }
     mosquitto_passwd -b -c /secrets/mosquitto.passwd control-plane "$(password mqtt_control_plane_password)"
     mosquitto_passwd -b /secrets/mosquitto.passwd macbook "$(password mqtt_macbook_password)"
-    mosquitto_passwd -b /secrets/mosquitto.passwd kiosk-controller "$(password mqtt_kiosk_controller_password)"
     mosquitto_passwd -b /secrets/mosquitto.passwd healthcheck "$(password mqtt_health_password)"
     chown root:root /secrets/mosquitto.passwd
     chmod 600 /secrets/mosquitto.passwd

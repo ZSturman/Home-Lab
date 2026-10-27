@@ -1,289 +1,55 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { DemoLab, type DemoMode } from "./demo-lab";
-import type { DemoProfile } from "../lib/demo";
-import type { AlertRecord, Snapshot } from "../lib/types";
+import type { AttentionItem, AutomationRun, PlatformOverview, ProjectRecord, ServiceConfig } from "../lib/types";
 
-const views = ["Overview", "Demo Lab"] as const;
+const views = ["Now", "Home", "Projects", "Learn", "Media", "AI", "Files", "Automations", "Data", "System"] as const;
+type View = (typeof views)[number];
+const emptyOverview: PlatformOverview = { generated_at: null, system: { nodes: [], providers: [], alerts: [], runs: [], led: {} }, attention: [], projects: [], resources: [], workspace: null, registry: { nodes: [], devices: [], services: [], automations: [], integrations: [] } };
+const titles: Record<View, [string, string]> = {
+  Now: ["Now", "What deserves attention right now."], Home: ["Home", "Live home and device state."], Projects: ["Projects", "Real Project Hub and Notion reconciliation state."], Learn: ["Learn", "Flashcards and discovery when their sources are configured."], Media: ["Media", "Private media and camera services."], AI: ["AI Studio", "Mac-hosted inference and generation capabilities."], Files: ["Files & backups", "Workspace Sync is the authority for files and recovery."], Automations: ["Automations", "Registered, durable, and explicitly safe operations."], Data: ["Data", "Project resources and connected data sources."], System: ["System", "Nodes, providers, Tailnet, and platform health."],
+};
 
-const emptySnapshot: Snapshot = { nodes: [], providers: [], alerts: [], runs: [], led: {} };
-
-function label(status: string) {
-  return status.replaceAll("-", " ");
-}
-
-function shortTime(value: string | null) {
-  return value ? new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(value)) : "Not reported";
-}
-
-function bytes(value: number | null | undefined) {
-  if (typeof value !== "number") return "Not reported";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let amount = value; let unit = 0;
-  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; }
-  return `${amount.toFixed(unit < 3 ? 0 : 1)} ${units[unit]}`;
-}
-
-function epochTime(value: number | null | undefined) {
-  return typeof value === "number" ? shortTime(new Date(value * 1000).toISOString()) : "Not reported";
-}
+function pretty(value: string | null | undefined) { return value ? value.replaceAll("-", " ").replaceAll("_", " ") : "Not reported"; }
+function time(value: string | null | undefined) { return value ? new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value)) : "Not reported"; }
+function bytes(value: number | null | undefined) { if (typeof value !== "number") return "Not reported"; const units = ["B", "KB", "MB", "GB", "TB"]; let amount = value; let unit = 0; while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1; } return `${amount.toFixed(unit < 3 ? 0 : 1)} ${units[unit]}`; }
+function tone(value: string | null | undefined) { const status = (value ?? "unknown").toLowerCase(); return /critical|error|failed|offline|unavailable/.test(status) ? "bad" : /warning|degraded|unknown|pending/.test(status) ? "warn" : "good"; }
+function Status({ value }: { value: string | null | undefined }) { return <span className={`status ${tone(value)}`}><i />{pretty(value)}</span>; }
+function Empty({ title, detail }: { title: string; detail: string }) { return <article className="empty-state"><strong>{title}</strong><p>{detail}</p></article>; }
+function NotConfigured({ name, detail }: { name: string; detail: string }) { return <article className="empty-state"><span className="eyebrow">Not configured</span><strong>{name}</strong><p>{detail}</p></article>; }
 
 export function Dashboard({ platformName }: { platformName: string }) {
-  const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
+  const [overview, setOverview] = useState<PlatformOverview>(emptyOverview);
+  const [activeView, setActiveView] = useState<View>("Now");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [activeView, setActiveView] = useState<(typeof views)[number]>("Overview");
-  const [demoMode, setDemoMode] = useState<DemoMode>("simulation");
-  const [demoProfile, setDemoProfile] = useState<DemoProfile>("mac");
-  const [liveUnlocked, setLiveUnlocked] = useState(false);
-  const [actionFeedback, setActionFeedback] = useState<{ tone: "success" | "error"; message: string } | null>(null);
-  const [workspaceStatus, setWorkspaceStatus] = useState<Record<string, any> | null>(null);
-  const [tailnetStatus, setTailnetStatus] = useState<Record<string, any> | null>(null);
-
+  const [ambient, setAmbient] = useState(false);
   const refresh = useCallback(async () => {
-    try {
-      const response = await fetch("/api/v1/system/snapshot", { cache: "no-store" });
-      if (!response.ok) throw new Error(`Control Plane returned ${response.status}`);
-      setSnapshot(await response.json());
-      setError(null);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Unable to reach the Control Plane");
-    }
+    try { const response = await fetch("/api/v1/platform/overview", { cache: "no-store" }); if (!response.ok) throw new Error(`Control Plane returned ${response.status}`); setOverview(await response.json()); setError(null); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to reach the Control Plane"); }
   }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const readTailnet = async () => {
-      try {
-        const response = await fetch("/api/v1/tailnet/status", { cache: "no-store" });
-        if (response.ok && !cancelled) setTailnetStatus(await response.json());
-      } catch {
-        // Connectivity telemetry is an enhancement, never a dashboard dependency.
-      }
-    };
-    void readTailnet();
-    const interval = window.setInterval(() => void readTailnet(), 15000);
-    return () => { cancelled = true; window.clearInterval(interval); };
-  }, []);
-
-  const shouldConnect = activeView === "Overview" || demoMode === "live";
-
-  useEffect(() => {
-    if (!shouldConnect) return;
-    void refresh();
-    let fallback: number | undefined;
-    let retry: number | undefined;
-    let socket: WebSocket | undefined;
-    let disposed = false;
-
-    const startFallback = () => {
-      if (!fallback) fallback = window.setInterval(() => void refresh(), 5000);
-    };
-    const stopFallback = () => {
-      if (fallback) window.clearInterval(fallback);
-      fallback = undefined;
-    };
-    const connect = () => {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      socket = new WebSocket(`${protocol}//${window.location.host}/api/v1/live`);
-      socket.onopen = stopFallback;
-      socket.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data) as { type?: string; data?: Snapshot };
-          if (message.type === "system.snapshot" && message.data) {
-            setSnapshot(message.data);
-            setError(null);
-          }
-        } catch {
-          // A malformed live frame must not disrupt the dashboard.
-        }
-      };
-      socket.onerror = startFallback;
-      socket.onclose = () => {
-        startFallback();
-        if (!disposed) retry = window.setTimeout(connect, 3000);
-      };
-    };
-
-    connect();
-    return () => {
-      disposed = true;
-      stopFallback();
-      if (retry) window.clearTimeout(retry);
-      socket?.close();
-    };
-  }, [refresh, shouldConnect]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const readStatus = async () => {
-      try {
-        const response = await fetch("/api/v1/storage/status", { cache: "no-store" });
-        if (response.ok && !cancelled) {
-          const next = await response.json();
-          setWorkspaceStatus((previous) => {
-            // A transient 200/unknown proxy response is transport state, not
-            // authoritative evidence that a known backup stopped.
-            if (next.backup?.state === "unknown" && previous?.backup?.state && previous.backup.state !== "unknown") {
-              return { ...previous, transport: { state: "delayed", last_success_at: previous.transport?.last_success_at } };
-            }
-            return next;
-          });
-        }
-      } catch {
-        // The primary dashboard remains useful if the sibling storage service is unavailable.
-      }
-    };
-    void readStatus();
-    const interval = window.setInterval(() => void readStatus(), 5000);
-    return () => { cancelled = true; window.clearInterval(interval); };
-  }, []);
-
-  const invoke = useCallback(async (key: string, path: string, body?: object, successMessage = "Action accepted by the Control Plane") => {
-    setBusy(key);
-    try {
-      const response = await fetch(path, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      if (!response.ok) {
-        const message = await response.json().catch(() => ({}));
-        throw new Error(message.detail ?? `Request failed with ${response.status}`);
-      }
-      await refresh();
-      setActionFeedback({ tone: "success", message: successMessage });
-    } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Action failed";
-      setError(message);
-      setActionFeedback({ tone: "error", message });
-    } finally {
-      setBusy(null);
-    }
-  }, [refresh]);
-
-  const activeRun = useMemo(() => snapshot.runs.find((run) => run.status === "running") ?? snapshot.runs[0], [snapshot.runs]);
-  const runtime = snapshot.runtime ?? { node_id: "control-plane", node_name: "Control Plane host", hardware_profile: "standard" as const };
-
-  const runDemoLiveAction = useCallback((action: "lights" | "automation" | "notification") => {
-    if (action === "lights") {
-      void invoke("demo-lights", "/api/v1/devices/living-room-lights/light-action", { action: "toggle" }, "Live light toggle sent to Home Assistant.");
-      return;
-    }
-    if (action === "automation") {
-      void invoke("demo-automation", "/api/v1/automations/safe-test/runs", { trigger: "manual" }, "Safe Test Automation queued.");
-      return;
-    }
-    void invoke("demo-notification", "/api/v1/commands", { node_id: "macbook", command_type: "notification.show", payload: { title: "Home Platform", message: "Demo Lab live command acknowledged." } }, "Live Mac notification queued.");
-  }, [invoke]);
-
-  return (
-    <main className="shell">
-      <aside className="sidebar">
-        <div className="brand"><span className="brand-mark">HP</span><span>{platformName}</span></div>
-        <nav aria-label="Platform views">{views.map((view) => (
-          <button key={view} className={activeView === view ? "nav-item active" : "nav-item"} onClick={() => setActiveView(view)}>{view}</button>
-        ))}</nav>
-        <p className="privacy">Private · Tailscale only</p>
-      </aside>
-
-      <section className="content">
-        {activeView === "Demo Lab" ? <DemoLab
-          key={demoProfile}
-          mode={demoMode}
-          profile={demoProfile}
-          isLiveUnlocked={liveUnlocked}
-          snapshot={snapshot}
-          busy={busy}
-          actionFeedback={actionFeedback}
-          onModeChange={setDemoMode}
-          onProfileChange={setDemoProfile}
-          onUnlockLive={() => setLiveUnlocked(true)}
-          onRefreshLive={() => void refresh()}
-          onLiveAction={runDemoLiveAction}
-        /> : <>
-        <header className="topbar">
-          <div><p className="eyebrow">Home Platform</p><h1>Operational overview</h1></div>
-          <button className="secondary" onClick={() => void refresh()}>Refresh</button>
-        </header>
-
-        {error && <div className="notice error"><span>{error}</span><button onClick={() => setError(null)}>Dismiss</button></div>}
-
-        <section className="status-grid" aria-label="System state">
-          <article className="card emphasis"><p>Control Plane</p><strong>Online</strong><span>{runtime.node_name} · {runtime.hardware_profile === "pi-hardware" ? "hardware profile" : "standard profile"}</span></article>
-          <article className="card"><p>Tailnet devices</p><strong>{tailnetStatus?.devices?.filter((device: any) => device.online).length ?? "…"}/{tailnetStatus?.devices?.length ?? "…"}</strong><span>Live Tailscale connectivity</span></article>
-          <article className="card"><p>Attention</p><strong>{snapshot.alerts.length}</strong><span>Active messages</span></article>
-          <article className="card"><p>Status indicators</p><strong>{Object.values(snapshot.led).filter((led) => led.mode !== "off").length}</strong><span>Active physical LEDs</span></article>
-        </section>
-
-        <section className="panel">
-          <div className="panel-heading"><div><p className="eyebrow">Workspace Sync</p><h2>Backup protection</h2></div></div>
-          {workspaceStatus ? <div className="list">
-            <article className="list-row"><span className={`status-dot ${workspaceStatus.backup?.state === "completed" || workspaceStatus.backup?.state === "running" ? "online" : "offline"}`} /><div><strong>Backup: {workspaceStatus.backup?.state ?? "unknown"}</strong><p>Mac restic process → Mac monitor → Workspace Sync → Home Platform</p></div><span className="pill">{workspaceStatus.backup?.state ?? "unknown"}</span></article>
-            <p className="description">Process heartbeat: <strong>{workspaceStatus.backup?.process?.state ?? "unknown"}</strong> · PID {workspaceStatus.backup?.process?.pid ?? "not reported"} · last heartbeat {epochTime(workspaceStatus.backup?.process?.last_heartbeat_at)}.</p>
-            <p className="description">Latest captured progress: {workspaceStatus.backup?.progress?.percent_done != null ? `${(workspaceStatus.backup.progress.percent_done * 100).toFixed(2)}%` : "unavailable"} · telemetry: <strong>{workspaceStatus.backup?.progress?.state ?? "unavailable"}</strong> · last progress event {epochTime(workspaceStatus.backup?.progress?.last_event_at)}.</p>
-            {workspaceStatus.backup?.progress?.percent_done != null && <div className={`progress ${workspaceStatus.backup.progress.state !== "current" ? "stale" : ""}`} aria-label="Latest captured backup progress"><span style={{ width: `${Math.max(0, Math.min(100, workspaceStatus.backup.progress.percent_done * 100))}%` }} /></div>}
-            <p className="description">Status connection: <strong>{workspaceStatus.transport?.state ?? "unknown"}</strong> · last successful backup status {epochTime(workspaceStatus.transport?.last_success_at)}.</p>
-            <p className="description">External backup disk: <strong>{workspaceStatus.backup_destination?.state ?? "unavailable"}</strong> · {workspaceStatus.backup_destination?.device ?? "device unavailable"} · UUID {workspaceStatus.backup_destination?.uuid ?? "unknown"} · {workspaceStatus.backup_destination?.filesystem ?? "unknown"} · {workspaceStatus.backup_destination?.mount ?? "mount unavailable"}.</p>
-            <p className="description">Repository: <code>{workspaceStatus.backup_destination?.repository ?? workspaceStatus.backup?.destination ?? "unavailable"}</code> · repository check: {workspaceStatus.backup_destination?.repository_state ?? "unknown"} · {bytes(workspaceStatus.backup_destination?.usage?.available_bytes)} available.</p>
-            {(workspaceStatus.backup?.warning || workspaceStatus.backup?.error) && <p className="description">{workspaceStatus.backup.warning ?? workspaceStatus.backup.error}</p>}
-          </div> : <p className="empty">Reading Workspace Sync status…</p>}
-        </section>
-
-        <section className="panel">
-          <div className="panel-heading"><div><p className="eyebrow">Workspace Sync</p><h2>Workspace mirror</h2></div><span className="pill">{workspaceStatus?.storage?.mode ?? "unknown"}</span></div>
-          <p className="description">{workspaceStatus?.storage?.storage_health_detail ?? "Workspace mirror status is unavailable."}</p>
-        </section>
-
-        <section className="panel">
-          <div className="panel-heading"><div><p className="eyebrow">Tailscale</p><h2>Tailnet devices</h2></div><span className="pill">{tailnetStatus?.state ?? "reading"}</span></div>
-          {tailnetStatus ? <div className="list">{tailnetStatus.devices?.length ? tailnetStatus.devices.map((device: any) => (
-            <article className="list-row tailnet-device" key={device.id}><span className={`status-dot ${device.online ? "online" : "offline"}`} /><div><strong>{device.name}{device.local ? " · this Pi" : ""}</strong><p>Tailnet: {device.online ? "online" : "offline"} · {device.os} · {device.ips?.[0] ?? "no IP"} · last seen {shortTime(device.last_seen_at)}</p><p>{device.dns_name ?? "MagicDNS unavailable"} · {device.transport}{device.platform_agent ? ` · Platform agent: ${device.platform_agent.status}` : " · Platform agent: not installed"}{device.local ? ` · Home Platform: ${tailnetStatus.local_platform_service?.state ?? "unknown"} · Workspace Sync: ${workspaceStatus?.transport?.state ?? "unknown"}` : ""}</p></div><span className="pill">{device.online ? "online" : "offline"}</span></article>
-          )) : <p className="empty">No tailnet devices reported.</p>}{tailnetStatus.warnings?.map((warning: string) => <p className="description" key={warning}>{warning}</p>)}</div> : <p className="empty">Reading Tailscale state…</p>}
-        </section>
-
-        <div className="column-grid">
-          <section className="panel">
-            <div className="panel-heading"><div><p className="eyebrow">Home Platform</p><h2>Platform agents</h2></div></div>
-            <div className="list">{snapshot.nodes.length ? snapshot.nodes.map((node) => (
-              <article className="list-row" key={node.id}><span className={`status-dot ${node.status}`} /><div><strong>{node.name}</strong><p>Agent heartbeat: {node.status} · health: {node.health} · last seen {shortTime(node.last_seen_at)}</p></div><span className="pill">agent {label(node.status)}</span></article>
-            )) : <p className="empty">No Home Platform agents have reported.</p>}</div>
-          </section>
-
-          <section className="panel">
-            <div className="panel-heading"><div><p className="eyebrow">Lighting</p><h2>Living Room</h2></div><span className="pill">Home Assistant</span></div>
-            <p className="description">Configured target: <code>light.living_room_living_room</code></p>
-            <div className="control-grid">
-              <button disabled={busy !== null} onClick={() => void invoke("light-toggle", "/api/v1/devices/living-room-lights/light-action", { action: "toggle" })}>Toggle</button>
-              <button disabled={busy !== null} onClick={() => void invoke("light-up", "/api/v1/devices/living-room-lights/light-action", { action: "brightness", step: 5 })}>Brightness +</button>
-              <button disabled={busy !== null} onClick={() => void invoke("light-down", "/api/v1/devices/living-room-lights/light-action", { action: "brightness", step: -5 })}>Brightness −</button>
-              <button disabled={busy !== null} onClick={() => void invoke("light-warm", "/api/v1/devices/living-room-lights/light-action", { action: "color_temperature", step: -150 })}>Warmer</button>
-              <button disabled={busy !== null} onClick={() => void invoke("light-cool", "/api/v1/devices/living-room-lights/light-action", { action: "color_temperature", step: 150 })}>Cooler</button>
-            </div>
-          </section>
-        </div>
-
-        <div className="column-grid">
-          <section className="panel">
-            <div className="panel-heading"><div><p className="eyebrow">Automations</p><h2>Safe Test Automation</h2></div><button disabled={busy !== null} onClick={() => void invoke("safe-run", "/api/v1/automations/safe-test/runs", { trigger: "manual" })}>{busy === "safe-run" ? "Starting…" : "Run now"}</button></div>
-            {activeRun ? <ol className="stages">{activeRun.stages.length ? activeRun.stages.map((stage) => <li key={stage.position} className={stage.status}><span>{stage.status === "completed" ? "✓" : stage.status === "running" ? "●" : "○"}</span>{stage.name}</li>) : <li className="queued"><span>○</span>Waiting for Automation Controller</li>}</ol> : <p className="empty">No recent safe test Run.</p>}
-          </section>
-
-          <section className="panel">
-            <div className="panel-heading"><div><p className="eyebrow">Mac Node</p><h2>Command test</h2></div></div>
-            <p className="description">Queue a persisted, allowlisted macOS notification command.</p>
-            <button disabled={busy !== null} onClick={() => void invoke("notify", "/api/v1/commands", { node_id: "macbook", command_type: "notification.show", payload: { title: "Home Platform", message: "Dashboard command acknowledged." } })}>{busy === "notify" ? "Sending…" : "Send test notification"}</button>
-          </section>
-        </div>
-
-        <section className="panel">
-          <div className="panel-heading"><div><p className="eyebrow">Attention</p><h2>Why the LEDs are active</h2></div></div>
-          <div className="list">{snapshot.alerts.length ? snapshot.alerts.map((alert: AlertRecord) => <article className="alert-row" key={alert.id}><span className={`severity ${alert.severity}`} /><div><strong>{alert.title}</strong><p>{alert.detail || alert.kind}</p></div>{alert.dismissible && <button className="secondary" disabled={busy !== null} onClick={() => void invoke(`dismiss-${alert.id}`, `/api/v1/alerts/${alert.id}/dismiss`)}>Dismiss</button>}</article>) : <p className="empty">No action is required. Physical status LEDs are off.</p>}</div>
-        </section>
-        </>}
-      </section>
-    </main>
-  );
+  useEffect(() => { setAmbient(new URLSearchParams(window.location.search).get("display") === "ambient"); void refresh(); const interval = window.setInterval(() => void refresh(), 15_000); return () => window.clearInterval(interval); }, [refresh]);
+  const invoke = useCallback(async (key: string, path: string, body?: object) => { setBusy(key); try { const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined }); if (!response.ok) { const payload = await response.json().catch(() => ({})); throw new Error(payload.detail ?? `Request failed with ${response.status}`); } await refresh(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Action failed"); } finally { setBusy(null); } }, [refresh]);
+  const current = ambient ? "Now" : activeView;
+  const provider = (id: string) => overview.system.providers.find((item) => item.service_id === id);
+  const automationById = new Map(overview.registry.automations.map((item) => [item.id, item]));
+  const backup = overview.workspace?.backup; const storage = overview.workspace?.storage;
+  const attentionList = (items: AttentionItem[]) => items.length ? <div className="list">{items.map((item, index) => <article className="list-row" key={`${item.kind}-${item.title}-${index}`}><Status value={item.severity} /><div><strong>{item.title}</strong><p>{item.detail}</p><small>{item.source}</small></div><span className="pill">{item.target}</span></article>)}</div> : <Empty title="Nothing needs attention" detail="No active alerts, failed automation runs, or provider failures are currently reported." />;
+  const projectList = (projects: ProjectRecord[]) => projects.length ? <div className="list">{projects.map((project) => <article className="list-row" key={project.id}><Status value={project.sync_state} /><div><strong>{project.name}</strong><p>Notion: {pretty(project.notion_state)} · Workspace: {pretty(project.workspace_state)}{project.last_error ? ` · ${project.last_error}` : ""}</p><small>Updated {time(project.updated_at)} · {project.workspace_device ?? "workspace device not reported"}</small></div><span className="pill">{pretty(project.sync_state)}</span></article>)}</div> : <Empty title="No projects reported" detail="Project Hub has not received a project record yet. Create projects through the existing authorized client or reconcile the configured Notion source." />;
+  const runList = overview.system.runs.length ? <div className="list">{overview.system.runs.map((run: AutomationRun) => { const definition = automationById.get(run.automation_id); const active = ["queued", "running"].includes(run.status); const canRun = definition?.enabled && definition.actions.includes("run") && definition.runner === "control-plane" && !active; const canStop = active && definition?.actions.includes("stop"); return <article className="list-row" key={run.id}><Status value={run.status} /><div><strong>{definition?.name ?? run.automation_id}</strong><p>{pretty(run.status)}{run.current_stage ? ` · ${run.current_stage}` : ""}</p><small>Started {time(run.started_at)} · completed {time(run.completed_at)}</small></div>{canStop && <button disabled={busy !== null} onClick={() => void invoke(`stop-${run.id}`, `/api/v1/automations/runs/${run.id}/stop`)}>Stop</button>}{canRun && <button disabled={busy !== null} onClick={() => void invoke(`run-${run.automation_id}`, `/api/v1/automations/${run.automation_id}/runs`, { trigger: "manual", source: "dashboard" })}>Run again</button>}</article>; })}</div> : <Empty title="No automation runs yet" detail="Only registered automation runs will appear here; this view never invents a schedule or result." />;
+  function renderView() {
+    if (current === "Now" && ambient) { const first = overview.attention[0]; return <section className="ambient-now"><time>{new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date())}</time><article className={`ambient-attention ${tone(first?.severity)}`}><span>{first ? pretty(first.severity) : "All clear"}</span><strong>{first?.title ?? "Nothing needs attention"}</strong><p>{first?.detail ?? "No active alerts, failed runs, or provider failures are reported."}</p></article><div className="ambient-glance"><span><b>Backup</b>{pretty(backup?.state)}</span><span><b>Project</b>{overview.projects[0]?.name ?? "None"}</span><span><b>Camera</b>{pretty(provider("brio-webcam")?.health ?? "not configured")}</span><span><b>Pi</b>{pretty(overview.system.nodes.find((node) => node.id === "pi-control-plane")?.status)}</span></div></section>; }
+    if (current === "Now") return <><section className="metric-grid"><article className="metric"><span>Attention</span><strong>{overview.attention.length}</strong><small>{overview.attention.filter((item) => ["critical", "error"].includes(item.severity)).length} critical or error</small></article><article className="metric"><span>Backup</span><strong>{pretty(backup?.state)}</strong><small>Workspace Sync status</small></article><article className="metric"><span>Current project</span><strong>{overview.projects[0]?.name ?? "None"}</strong><small>{overview.projects[0] ? `Updated ${time(overview.projects[0].updated_at)}` : "No records"}</small></article></section><section className="panel"><div className="section-heading"><div><p className="eyebrow">Attention center</p><h2>Act on what changed</h2></div><span className="pill">Deterministic priority</span></div>{attentionList(overview.attention.slice(0, 8))}</section><section className="panel"><div className="section-heading"><div><p className="eyebrow">Glance</p><h2>System context</h2></div></div><div className="glance"><span>Pi <Status value={overview.system.nodes.find((node) => node.id === "pi-control-plane")?.status} /></span><span>Mac <Status value={overview.system.nodes.find((node) => node.id === "macbook")?.status} /></span><span>Camera <Status value={provider("brio-webcam")?.health ?? "not configured"} /></span><span>Storage <Status value={storage?.storage_health ?? "unknown"} /></span></div></section></>;
+    if (current === "Home") return <><section className="metric-grid"><article className="metric"><span>Home Assistant</span><strong>{provider("home-assistant") ? pretty(provider("home-assistant")?.health) : "Not reported"}</strong><small>Provider-reported state</small></article><article className="metric"><span>Camera</span><strong>{provider("brio-webcam") ? pretty(provider("brio-webcam")?.health) : "Not configured"}</strong><small>Pi hardware profile</small></article><article className="metric"><span>Home Pi</span><strong>{pretty(overview.system.nodes.find((node) => node.id === "pi-control-plane")?.status)}</strong><small>Control Plane heartbeat</small></article></section><section className="panel"><div className="section-heading"><div><p className="eyebrow">Lighting</p><h2>Living Room</h2></div><Status value={provider("home-assistant")?.health ?? "unknown"} /></div><p className="description">Actions are routed only through the configured Home Assistant device action. They are not shell commands.</p><div className="controls"><button disabled={busy !== null} onClick={() => void invoke("light-toggle", "/api/v1/devices/living-room-lights/light-action", { action: "toggle" })}>Toggle</button><button disabled={busy !== null} onClick={() => void invoke("light-up", "/api/v1/devices/living-room-lights/light-action", { action: "brightness", step: 5 })}>Brighter</button><button disabled={busy !== null} onClick={() => void invoke("light-down", "/api/v1/devices/living-room-lights/light-action", { action: "brightness", step: -5 })}>Dimmer</button></div></section><section className="panel"><div className="section-heading"><div><p className="eyebrow">Security</p><h2>Camera and events</h2></div></div>{provider("brio-webcam") ? <div className="list"><article className="list-row"><Status value={provider("brio-webcam")?.health} /><div><strong>Logitech Brio 101</strong><p>Camera state is reported by the private Pi provider. Snapshot/event browsing is not exposed by this Control Plane yet.</p></div></article></div> : <NotConfigured name="Camera provider" detail="Enable the Pi hardware profile and register a healthy go2rtc/media provider before camera media can appear here." />}</section></>;
+    if (current === "Projects") return <><section className="panel"><div className="section-heading"><div><p className="eyebrow">Project Hub</p><h2>Projects</h2></div><span className="pill">{overview.projects.length} real records</span></div>{projectList(overview.projects)}</section><section className="panel"><div className="section-heading"><div><p className="eyebrow">Current project</p><h2>Most recently updated</h2></div></div>{overview.projects[0] ? projectList([overview.projects[0]]) : <Empty title="No current project" detail="A current-project session/Next Work source has not been configured. The most recently updated Project Hub record will be used when one exists." />}</section></>;
+    if (current === "Learn") return <><section className="panel"><div className="section-heading"><div><p className="eyebrow">Flashcards</p><h2>Review queue</h2></div></div><NotConfigured name="Notion flashcards" detail="No flashcard data source, scheduling service, or credentials were discovered. Configure a Notion data source and registered scheduler before this view can show cards." /></section><section className="panel"><div className="section-heading"><div><p className="eyebrow">Discovery</p><h2>Science, math, and technology</h2></div></div><NotConfigured name="Discovery sources" detail="No trusted-creator/feed configuration or scoring data exists yet. This view intentionally shows no invented recommendations." /></section></>;
+    if (current === "Media") return <><section className="panel"><div className="section-heading"><div><p className="eyebrow">Private media</p><h2>Camera stream</h2></div><Status value={provider("brio-webcam")?.health ?? "not configured"} /></div>{provider("brio-webcam") ? <p className="description">The camera transport is private to the Pi/Tailnet. Stream controls remain unavailable until an authenticated Dashboard proxy is registered.</p> : <NotConfigured name="Camera media" detail="The go2rtc Pi-hardware profile is not reporting a provider. No stream or snapshot is fabricated." />}</section><section className="panel"><div className="section-heading"><div><p className="eyebrow">Library</p><h2>Audiobooks, podcasts, and video</h2></div></div><NotConfigured name="Media library server" detail="Audiobookshelf or another media server was not discovered in the deployed configuration." /></section></>;
+    if (current === "AI") return <><section className="metric-grid"><article className="metric"><span>LM Studio</span><strong>{provider("lmstudio") ? pretty(provider("lmstudio")?.health) : "Not configured"}</strong><small>Mac service provider</small></article><article className="metric"><span>ComfyUI</span><strong>Not configured</strong><small>No provider registered</small></article><article className="metric"><span>Compute node</span><strong>{pretty(overview.system.nodes.find((node) => node.id === "macbook")?.status)}</strong><small>Mac node heartbeat</small></article></section><section className="panel"><div className="section-heading"><div><p className="eyebrow">LM Studio</p><h2>Local AI</h2></div><Status value={provider("lmstudio")?.health ?? "not configured"} /></div>{provider("lmstudio") ? <p className="description">LM Studio is registered as a text-generation provider. Model discovery, chat, and settings need a deliberate authenticated Mac-node API; no unsupported controls are shown.</p> : <NotConfigured name="LM Studio provider" detail="Register an LM Studio capability with the Mac node and report its health before local AI controls can be enabled." />}</section><section className="panel"><div className="section-heading"><div><p className="eyebrow">ComfyUI</p><h2>Generation jobs</h2></div></div><NotConfigured name="ComfyUI workflow provider" detail="No ComfyUI endpoint or curated workflow registry was discovered. The generic automation/job model is available once a provider is registered." /></section></>;
+    if (current === "Files") return <><section className="metric-grid"><article className="metric"><span>Workspace mode</span><strong>{pretty(storage?.mode)}</strong><small>{storage?.detail ?? "Workspace Sync status"}</small></article><article className="metric"><span>Backup</span><strong>{pretty(backup?.state)}</strong><small>{backup?.warning ?? backup?.error ?? "Reported by Workspace Sync"}</small></article><article className="metric"><span>Backup disk</span><strong>{pretty(overview.workspace?.backup_destination?.state)}</strong><small>{bytes(overview.workspace?.backup_destination?.usage?.available_bytes)} available</small></article></section><section className="panel"><div className="section-heading"><div><p className="eyebrow">Workspace Sync</p><h2>File operations and recovery</h2></div></div><p className="description">Workspace Sync owns file browsing, uploads, restic snapshots, restore, and stricter backup controls. Home Platform consumes only its status contract, so it does not duplicate unsafe filesystem access.</p>{storage?.mode === "unknown" ? <Empty title="Workspace Sync unavailable" detail="The status contract is delayed or not configured; the rest of Home Platform remains usable." /> : <div className="list"><article className="list-row"><Status value={storage?.storage_health} /><div><strong>Workspace mirror</strong><p>{storage?.storage_health_detail}</p></div></article><article className="list-row"><Status value={backup?.state} /><div><strong>Backup status</strong><p>{backup?.warning ?? backup?.error ?? "No warning reported."}</p></div></article></div>}</section></>;
+    if (current === "Automations") return <><section className="panel"><div className="section-heading"><div><p className="eyebrow">Registered automation runs</p><h2>Recent activity</h2></div></div>{runList}</section><section className="panel"><div className="section-heading"><div><p className="eyebrow">Registry</p><h2>Available automations</h2></div></div>{overview.registry.automations.length ? <div className="list">{overview.registry.automations.map((item) => <article className="list-row" key={item.id}><Status value={item.enabled ? "healthy" : "disabled"} /><div><strong>{item.name}</strong><p>{item.description || "No description"}</p><small>{item.node_id ?? "Control Plane"} · {item.runner}</small></div>{item.enabled && item.actions.includes("run") && item.runner === "control-plane" && <button disabled={busy !== null} onClick={() => void invoke(`run-${item.id}`, `/api/v1/automations/${item.id}/runs`, { trigger: "manual", source: "dashboard" })}>Run</button>}</article>)}</div> : <Empty title="No automations registered" detail="Add an explicit automation registry entry; free-form commands are never accepted." />}</section></>;
+    if (current === "Data") return <><section className="panel"><div className="section-heading"><div><p className="eyebrow">Resources</p><h2>Project-linked records</h2></div><span className="pill">{overview.resources.length} records</span></div>{overview.resources.length ? <div className="list">{overview.resources.map((resource) => <article className="list-row" key={resource.id}><Status value={resource.status} /><div><strong>{resource.label}</strong><p>{resource.resource_type} · {resource.remote_url}</p><small>Notion: {resource.notion_page_id ? "linked" : "not linked"} · updated {time(resource.updated_at)}</small></div></article>)}</div> : <Empty title="No resource records" detail="No Project Core resource requests have been recorded yet." />}</section><section className="panel"><div className="section-heading"><div><p className="eyebrow">Notion</p><h2>Generic data sources</h2></div></div><NotConfigured name="Generic Notion browser" detail="Projects and Resources are the only discovered Notion schemas. A configured source registry, schema inspector, and permission model are required before arbitrary Notion CRUD can be exposed." /></section></>;
+    return <><section className="metric-grid"><article className="metric"><span>Nodes</span><strong>{overview.system.nodes.length}</strong><small>Control Plane heartbeats</small></article><article className="metric"><span>Providers</span><strong>{overview.system.providers.length}</strong><small>Registered service reports</small></article><article className="metric"><span>Alerts</span><strong>{overview.system.alerts.length}</strong><small>Durable active alerts</small></article></section><section className="panel"><div className="section-heading"><div><p className="eyebrow">Compute nodes</p><h2>Machines</h2></div></div>{overview.system.nodes.length ? <div className="list">{overview.system.nodes.map((node) => <article className="list-row" key={node.id}><Status value={node.status} /><div><strong>{node.name}</strong><p>Health: {pretty(node.health)} · last heartbeat {time(node.last_seen_at)}</p></div><span className="pill">{node.id}</span></article>)}</div> : <Empty title="No nodes reported" detail="The Control Plane has not received a node heartbeat." />}</section><section className="panel"><div className="section-heading"><div><p className="eyebrow">Services</p><h2>Provider health</h2></div></div>{overview.registry.services.length ? <div className="list">{overview.registry.services.map((service: ServiceConfig) => { const report = provider(service.id); return <article className="list-row" key={service.id}><Status value={report?.health ?? "not configured"} /><div><strong>{service.name}</strong><p>{service.capability} · {report ? `last report ${time(report.last_seen_at)}` : "No provider report received"}</p></div>{service.health_check === "node-refresh-health" && <button disabled={busy !== null} onClick={() => void invoke(`health-${service.id}`, `/api/v1/services/${service.id}/health-check`)}>Check</button>}</article>; })}</div> : <Empty title="No services registered" detail="Add a service registry entry and a node health reporter." />}</section>{attentionList(overview.attention)}</>;
+  }
+  return <main className={`shell${ambient ? " ambient" : ""}`}>{!ambient && <aside className="sidebar"><div className="brand"><span className="brand-mark">HP</span><span>{platformName}</span></div><nav aria-label="Platform views">{views.map((item) => <button key={item} className={item === activeView ? "nav-item active" : "nav-item"} onClick={() => setActiveView(item)}>{item}</button>)}</nav><p className="privacy">Private · Tailscale only</p></aside>}<section className="content"><header className="topbar"><div><p className="eyebrow">{ambient ? "Ambient display" : "Home Platform"}</p><h1>{titles[current][0]}</h1><p className="subtitle">{titles[current][1]}</p></div>{!ambient && <button className="secondary" onClick={() => void refresh()}>Refresh</button>}</header>{error && <div className="notice error"><span>{error}</span><button className="secondary" onClick={() => setError(null)}>Dismiss</button></div>}{renderView()}</section></main>;
 }

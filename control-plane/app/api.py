@@ -39,6 +39,13 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def utc_timestamp(value: datetime) -> str:
+    """SQLite reloads UTC DateTime columns without tzinfo; retain the wire contract."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
 def node_payload(record: NodeRecord) -> dict:
     return {
         "id": record.id,
@@ -47,7 +54,7 @@ def node_payload(record: NodeRecord) -> dict:
         "health": record.health,
         "actual_state": record.actual_state,
         "capabilities": record.capabilities,
-        "last_seen_at": record.last_seen_at.isoformat() if record.last_seen_at else None,
+        "last_seen_at": utc_timestamp(record.last_seen_at) if record.last_seen_at else None,
     }
 
 
@@ -59,7 +66,7 @@ def provider_payload(record: ServiceProviderRecord) -> dict:
         "health": record.health,
         "capabilities": record.capabilities,
         "details": record.details,
-        "last_seen_at": record.last_seen_at.isoformat() if record.last_seen_at else None,
+        "last_seen_at": utc_timestamp(record.last_seen_at) if record.last_seen_at else None,
     }
 
 
@@ -71,8 +78,8 @@ def command_payload(record: CommandRecord) -> dict:
         "status": record.status,
         "payload": record.payload,
         "result": record.result,
-        "expires_at": record.expires_at.isoformat(),
-        "created_at": record.created_at.isoformat(),
+        "expires_at": utc_timestamp(record.expires_at),
+        "created_at": utc_timestamp(record.created_at),
     }
 
 
@@ -83,8 +90,8 @@ def run_payload(record: AutomationRun, stages: list[AutomationStage] | None = No
         "trigger": record.trigger,
         "status": record.status,
         "current_stage": record.current_stage,
-        "started_at": record.started_at.isoformat() if record.started_at else None,
-        "completed_at": record.completed_at.isoformat() if record.completed_at else None,
+        "started_at": utc_timestamp(record.started_at) if record.started_at else None,
+        "completed_at": utc_timestamp(record.completed_at) if record.completed_at else None,
         "stages": [
             {"name": stage.name, "position": stage.position, "status": stage.status, "detail": stage.detail}
             for stage in (stages or [])
@@ -128,8 +135,98 @@ def registry_payload() -> dict:
     return {
         "version": 1,
         "nodes": [node.model_dump(mode="json") for node in config.nodes],
+        "devices": [device.model_dump(mode="json") for device in config.devices],
         "automations": [automation.model_dump(mode="json") for automation in config.automations],
         "services": [service.model_dump(mode="json") for service in config.services],
+        # Only stable identity/type are client-safe here. Base URLs and secret
+        # references stay inside the Control Plane configuration boundary.
+        "integrations": [
+            {"id": str(item.get("id", "")), "type": str(item.get("type", ""))}
+            for item in config.integrations
+        ],
+    }
+
+
+_ATTENTION_RANK = {"critical": 0, "error": 1, "warning": 2, "info": 3, "success": 4}
+
+
+def _attention_item(*, kind: str, severity: str, title: str, detail: str, source: str, target: str) -> dict:
+    """One client-safe, explainable item in the deterministic Now queue."""
+    return {
+        "kind": kind,
+        "severity": severity if severity in _ATTENTION_RANK else "info",
+        "title": title,
+        "detail": detail,
+        "source": source,
+        "target": target,
+    }
+
+
+async def platform_overview(session: AsyncSession) -> dict:
+    """Shared real-data read model for every Home Platform view.
+
+    This is deliberately a composition of the existing durable state and the
+    one approved Workspace Sync boundary. It creates no records and performs
+    no host scraping, so an unavailable sibling service degrades only its
+    own section rather than the entire dashboard.
+    """
+    state = await snapshot(session)
+    projects = list((await session.execute(
+        select(ProjectRecord).order_by(ProjectRecord.updated_at.desc()).limit(100)
+    )).scalars())
+    resources = list((await session.execute(
+        select(ResourceRecord).order_by(ResourceRecord.updated_at.desc()).limit(100)
+    )).scalars())
+    workspace = await fetch_workspace_status()
+
+    attention = [
+        _attention_item(
+            kind="alert", severity=item["severity"], title=item["title"],
+            detail=item["detail"] or item["kind"], source=item["source_type"], target="attention",
+        )
+        for item in state["alerts"]
+    ]
+    for provider in state["providers"]:
+        health = str(provider.get("health", "unknown")).lower()
+        if health in {"offline", "failed", "error", "degraded"}:
+            severity = "error" if health in {"offline", "failed", "error"} else "warning"
+            attention.append(_attention_item(
+                kind="service", severity=severity,
+                title=f"{provider['service_id']} needs attention",
+                detail=f"Reported health: {health} on {provider['node_id']}.",
+                source="service-provider", target="system",
+            ))
+    for run in state["runs"]:
+        if run["status"] in {"failed", "cancelled"}:
+            attention.append(_attention_item(
+                kind="automation", severity="error", title=f"Automation {run['automation_id']} {run['status']}",
+                detail=run.get("current_stage") or "Review the run stages for details.",
+                source="automation", target="automations",
+            ))
+    backup = workspace.get("backup") or {}
+    backup_state = str(backup.get("state", "unknown")).lower()
+    if backup_state in {"failed", "error", "interrupted"}:
+        attention.append(_attention_item(
+            kind="backup", severity="error", title="Backup needs attention",
+            detail=str(backup.get("error") or backup.get("warning") or f"Backup state: {backup_state}."),
+            source="workspace-sync", target="files",
+        ))
+    elif backup_state == "unknown":
+        attention.append(_attention_item(
+            kind="backup", severity="warning", title="Backup status is unavailable",
+            detail=str(backup.get("warning") or "Workspace Sync has not reported a backup status."),
+            source="workspace-sync", target="files",
+        ))
+
+    attention.sort(key=lambda item: (_ATTENTION_RANK[item["severity"]], item["title"].lower()))
+    return {
+        "generated_at": utc_now().isoformat(),
+        "system": state,
+        "attention": attention,
+        "projects": [project_payload(project) for project in projects],
+        "resources": [resource_payload(resource) for resource in resources],
+        "workspace": workspace,
+        "registry": registry_payload(),
     }
 
 
@@ -162,9 +259,22 @@ async def healthz() -> dict:
     return {"status": "healthy"}
 
 
+@app.get("/api/v1/home-page")
+async def get_home_page(session: AsyncSession = Depends(get_session)) -> dict:
+    # Same tailnet/loopback access boundary as the existing read-only endpoints.
+    from .homepage import summary
+    return summary(await active_alerts(session))
+
+
 @app.get("/api/v1/system/snapshot")
 async def get_snapshot(session: AsyncSession = Depends(get_session)) -> dict:
     return await snapshot(session)
+
+
+@app.get("/api/v1/platform/overview")
+async def get_platform_overview(session: AsyncSession = Depends(get_session)) -> dict:
+    """The single read model used by responsive Home Platform views."""
+    return await platform_overview(session)
 
 
 @app.get("/api/v1/registry")
@@ -208,7 +318,7 @@ async def request_service_health_check(service_id: str, session: AsyncSession = 
             "command_id": command.id,
             "command_type": command.command_type,
             "payload": command.payload,
-            "expires_at": command.expires_at.isoformat(),
+            "expires_at": utc_timestamp(command.expires_at),
         },
         correlation_id=command.id,
     )
@@ -275,7 +385,7 @@ async def create_command(request: CommandRequest, session: AsyncSession = Depend
             "command_id": command.id,
             "command_type": command.command_type,
             "payload": command.payload,
-            "expires_at": command.expires_at.isoformat(),
+            "expires_at": utc_timestamp(command.expires_at),
         },
         correlation_id=command.id,
     )
@@ -349,10 +459,24 @@ async def stop_automation_run(run_id: str, session: AsyncSession = Depends(get_s
     automation = load_configuration(get_settings().config_directory).automation(run.automation_id)
     if not automation or "stop" not in automation.actions:
         raise HTTPException(status_code=409, detail="This automation does not support graceful Stop")
-    if run.status in {"completed", "failed", "cancelled", "stopped"}:
+    if run.status in {"completed", "failed", "stopped"}:
         return run_payload(run)
-    run.status, run.completed_at = "cancelled", utc_now()
+    run.status = "cancelled"
+    run.completed_at = run.completed_at or utc_now()
+    stages = list((await session.execute(
+        select(AutomationStage).where(AutomationStage.run_id == run_id)
+    )).scalars())
+    for stage in stages:
+        if stage.status in {"queued", "running"}:
+            stage.status, stage.completed_at = "cancelled", run.completed_at
+    alerts = list((await session.execute(select(AlertRecord).where(
+        AlertRecord.source_type == "automation", AlertRecord.source_id == run_id,
+        AlertRecord.kind == "running", AlertRecord.status == "active",
+    ))).scalars())
+    for alert in alerts:
+        alert.status = "resolved"
     await session.commit()
+    await publish_attention(app, session)
     return run_payload(run)
 
 
@@ -383,8 +507,8 @@ def project_payload(record: ProjectRecord) -> dict:
         "sync_state": record.sync_state,
         "created_by": record.created_by,
         "last_error": record.last_error,
-        "created_at": record.created_at.isoformat(),
-        "updated_at": record.updated_at.isoformat(),
+        "created_at": utc_timestamp(record.created_at),
+        "updated_at": utc_timestamp(record.updated_at),
     }
 
 
@@ -400,9 +524,9 @@ def reconciliation_item_payload(record: ReconciliationItemRecord) -> dict:
         "workspace_name": record.workspace_name,
         "status": record.status,
         "resolution": record.resolution,
-        "created_at": record.created_at.isoformat(),
-        "updated_at": record.updated_at.isoformat(),
-        "resolved_at": record.resolved_at.isoformat() if record.resolved_at else None,
+        "created_at": utc_timestamp(record.created_at),
+        "updated_at": utc_timestamp(record.updated_at),
+        "resolved_at": utc_timestamp(record.resolved_at) if record.resolved_at else None,
     }
 
 
@@ -443,8 +567,8 @@ def resource_payload(record: ResourceRecord) -> dict:
         "status": record.status,
         "created_by": record.created_by,
         "last_error": record.last_error,
-        "created_at": record.created_at.isoformat(),
-        "updated_at": record.updated_at.isoformat(),
+        "created_at": utc_timestamp(record.created_at),
+        "updated_at": utc_timestamp(record.updated_at),
     }
 
 
@@ -475,7 +599,7 @@ def _publish_project_command(command: CommandRecord) -> None:
             "command_id": command.id,
             "command_type": command.command_type,
             "payload": command.payload,
-            "expires_at": command.expires_at.isoformat(),
+            "expires_at": utc_timestamp(command.expires_at),
         },
         correlation_id=command.id,
     )
@@ -619,7 +743,7 @@ async def get_tailnet_status(session: AsyncSession = Depends(get_session)) -> di
     records = list((await session.execute(select(NodeRecord))).scalars())
     agents = [
         {"id": record.id, "name": record.display_name or record.id, "status": record.status,
-         "health": record.health, "last_seen_at": record.last_seen_at.isoformat() if record.last_seen_at else None}
+         "health": record.health, "last_seen_at": utc_timestamp(record.last_seen_at) if record.last_seen_at else None}
         for record in records
     ]
     payload = await fetch_tailnet_status(agents=agents)
@@ -634,18 +758,6 @@ async def get_tailnet_status(session: AsyncSession = Depends(get_session)) -> di
 async def list_projects(session: AsyncSession = Depends(get_session)) -> list[dict]:
     records = list((await session.execute(select(ProjectRecord).order_by(ProjectRecord.name))).scalars())
     return [project_payload(record) for record in records]
-
-
-@app.get("/api/v1/projects/{project_id}")
-async def get_project(project_id: str, session: AsyncSession = Depends(get_session)) -> dict:
-    project = await session.get(ProjectRecord, project_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    jobs = list((await session.execute(
-        select(CommandRecord).where(CommandRecord.command_type.like("project.%")).order_by(CommandRecord.created_at.desc())
-    )).scalars())
-    matching_jobs = [command_payload(job) for job in jobs if str(job.payload.get("project_id")) == project_id]
-    return {**project_payload(project), "jobs": matching_jobs}
 
 
 @app.get("/api/v1/projects/jobs")
@@ -670,6 +782,18 @@ async def list_pending_project_jobs(node_id: str, session: AsyncSession = Depend
         .order_by(CommandRecord.created_at)
     )).scalars())
     return [command_payload(record) for record in records]
+
+
+@app.get("/api/v1/projects/{project_id}")
+async def get_project(project_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+    project = await session.get(ProjectRecord, project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    jobs = list((await session.execute(
+        select(CommandRecord).where(CommandRecord.command_type.like("project.%")).order_by(CommandRecord.created_at.desc())
+    )).scalars())
+    matching_jobs = [command_payload(job) for job in jobs if str(job.payload.get("project_id")) == project_id]
+    return {**project_payload(project), "jobs": matching_jobs}
 
 
 @app.post("/api/v1/reconciliation/run")

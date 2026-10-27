@@ -76,7 +76,7 @@ systemctl daemon-reload
 systemctl enable --now workspace-dashboard.service
 systemctl enable --now workspace-backup.timer workspace-backup-retention.timer workspace-backup-check.timer
 
-echo '== Installing kiosk browser startup policy =='
+echo '== Installing retained kiosk browser startup policy =='
 kiosk_home="$(getent passwd "$run_user" | cut -d: -f6)"
 [[ -n "$kiosk_home" ]] || { echo "Could not resolve home directory for $run_user" >&2; exit 66; }
 install -d -m 0755 -o "$run_user" -g "$run_user" "$kiosk_home/.config/systemd/user" "$kiosk_home/.config/autostart"
